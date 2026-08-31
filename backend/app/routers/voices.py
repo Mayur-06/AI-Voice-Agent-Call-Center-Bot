@@ -1,37 +1,58 @@
-import logging
-import httpx
-from fastapi import APIRouter, HTTPException
-from app.models.schemas import Voice
-from app.config import settings
-from edge_tts import list_voices
-
-logger = logging.getLogger(__name__)
+from fastapi import APIRouter
+from app.orchestration.graphs import voice_router_graph
 
 router = APIRouter(prefix="/api/voices", tags=["voices"])
 
 _FALLBACK_VOICES = [
-    Voice(voice_id="en-IN-NeerjaNeural", name="Neerja", category="premade", preview_url=None),
-    Voice(voice_id="en-US-GuyNeural", name="Guy", category="premade", preview_url=None),
-    Voice(voice_id="en-GB-SoniaNeural", name="Sonia", category="premade", preview_url=None),
+    {"voice_id": "en-IN-NeerjaNeural", "name": "Neerja (Female, India)", "language": "en-IN", "gender": "female"},
+    {"voice_id": "en-IN-PrabhatNeural", "name": "Prabhat (Male, India)", "language": "en-IN", "gender": "male"},
+    {"voice_id": "en-US-JennyNeural", "name": "Jenny (Female, US)", "language": "en-US", "gender": "female"},
 ]
 
 
-@router.get("", response_model=list[Voice])
 async def list_voices():
-    try:
-        voices_data = await list_voices()
-        voices = []
-        for v in voices_data:
-            voices.append(Voice(
-                voice_id=v.get("ShortName", ""),
-                name=v.get("FriendlyName", v.get("Name", "")),
-                category="premade" if v.get("Status") == "GA" else "custom",
-                preview_url=None,
-            ))
-        if voices:
-            return voices
-    except Exception as exc:
-        logger.warning("Failed to fetch voices from Edge TTS: %s", exc)
+    return list(_FALLBACK_VOICES)
 
-    logger.info("Falling back to default voice list")
-    return _FALLBACK_VOICES
+
+@router.get("/")
+async def get_voices():
+    try:
+        voices = await list_voices()
+    except Exception:
+        voices = list(_FALLBACK_VOICES)
+
+    transformed = []
+    for v in voices:
+        if "ShortName" in v:
+            transformed.append({
+                "voice_id": v.get("ShortName"),
+                "name": v.get("Name", v.get("ShortName", "")),
+                "language": v.get("Locale", ""),
+                "gender": v.get("Gender", "").lower(),
+                "preview_url": None,
+            })
+        else:
+            transformed.append({
+                "voice_id": v.get("id", v.get("voice_id")),
+                "name": v.get("name", v.get("Name", "")),
+                "language": v.get("language", v.get("Locale", "")),
+                "gender": v.get("gender", v.get("Gender", "")).lower(),
+                "preview_url": v.get("preview_url"),
+            })
+
+    try:
+        route_state = await voice_router_graph.ainvoke({
+            "sentiment": "neutral",
+            "conversation": [],
+            "voice_id": transformed[0]["voice_id"] if transformed else _FALLBACK_VOICES[0]["voice_id"],
+            "persona_id": "default",
+        })
+        recommended = route_state.get("persona_id", "default")
+        for v in transformed:
+            if v["voice_id"] == _FALLBACK_VOICES[0]["voice_id"]:
+                v["recommended_for"] = recommended
+                break
+    except Exception:
+        pass
+
+    return transformed

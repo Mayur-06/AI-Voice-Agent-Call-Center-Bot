@@ -1,25 +1,64 @@
-from pydub import AudioSegment
-from io import BytesIO
+import io
+import av
 import struct
 
 
-def convert_to_wav(audio_bytes: bytes, sample_rate: int = 16000) -> bytes:
-    audio = AudioSegment.from_file(BytesIO(audio_bytes))
-    audio = audio.set_frame_rate(sample_rate).set_channels(1).set_sample_width(2)
-    out = BytesIO()
-    audio.export(out, format="wav")
-    return out.getvalue()
-
-
-def get_duration_ms(audio_bytes: bytes) -> int:
-    audio = AudioSegment.from_file(BytesIO(audio_bytes))
-    return len(audio)
+def _open_container(audio_bytes: bytes):
+    return av.open(io.BytesIO(audio_bytes))
 
 
 def decode_to_pcm(audio_bytes: bytes, sample_rate: int = 16000) -> bytes:
-    audio = AudioSegment.from_file(BytesIO(audio_bytes))
-    audio = audio.set_frame_rate(sample_rate).set_channels(1).set_sample_width(2)
-    return audio.raw_data
+    try:
+        container = _open_container(audio_bytes)
+    except Exception as exc:
+        raise RuntimeError(f"Failed to open audio container: {exc}") from exc
+
+    audio_streams = [s for s in container.streams if s.type == "audio"]
+    if not audio_streams:
+        container.close()
+        raise RuntimeError("No audio stream found in container")
+
+    stream = audio_streams[0]
+    resampler = av.AudioResampler(
+        format="s16",
+        layout="mono",
+        rate=sample_rate,
+    )
+    frames = []
+    for packet in container.demux(stream):
+        for frame in packet.decode():
+            resampled = resampler.resample(frame)
+            if isinstance(resampled, list):
+                for f in resampled:
+                    frames.append(f.to_ndarray().tobytes())
+            else:
+                frames.append(resampled.to_ndarray().tobytes())
+    container.close()
+    return b"".join(frames)
+
+
+def convert_to_wav(audio_bytes: bytes, sample_rate: int = 16000) -> bytes:
+    pcm = decode_to_pcm(audio_bytes, sample_rate=sample_rate)
+    byte_rate = sample_rate * 1 * 2
+    block_align = 1 * 2
+    data_size = len(pcm)
+    header = struct.pack(
+        "<4sI4s4sIHHIIHH4sI",
+        b"RIFF",
+        36 + data_size,
+        b"WAVE",
+        b"fmt ",
+        16,
+        1,
+        1,
+        sample_rate,
+        byte_rate,
+        block_align,
+        16,
+        b"data",
+        data_size,
+    )
+    return header + pcm
 
 
 def pcm_to_wav(pcm_bytes: bytes, sample_rate: int = 16000, channels: int = 1, sample_width: int = 2) -> bytes:
@@ -43,3 +82,23 @@ def pcm_to_wav(pcm_bytes: bytes, sample_rate: int = 16000, channels: int = 1, sa
         data_size,
     )
     return header + pcm_bytes
+
+
+def get_duration_ms(audio_bytes: bytes) -> int:
+    try:
+        container = _open_container(audio_bytes)
+    except Exception as exc:
+        raise RuntimeError(f"Failed to open audio container: {exc}") from exc
+
+    stream = next((s for s in container.streams if s.type == "audio"), None)
+    if stream is None:
+        container.close()
+        raise RuntimeError("No audio stream found in container")
+
+    duration = 0.0
+    if stream.duration and stream.time_base:
+        duration = float(stream.duration * stream.time_base)
+    elif stream.container.duration is not None:
+        duration = float(stream.container.duration) / 1_000_000.0
+    container.close()
+    return int(duration * 1000)

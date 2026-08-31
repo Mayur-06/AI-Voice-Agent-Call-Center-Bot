@@ -1,48 +1,49 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter
+from datetime import datetime, timezone, timedelta
 from app.models.database import get_supabase
-from app.models.schemas import Analytics
-from datetime import datetime, timedelta, timezone
-from app.routers.auth import get_current_user
+from app.orchestration.graphs import insights_graph
 
 router = APIRouter(prefix="/api/analytics", tags=["analytics"])
 
 
-@router.get("", response_model=Analytics)
-async def get_analytics(user=Depends(get_current_user)):
+@router.get("/")
+async def get_analytics():
     supabase = get_supabase()
-    sessions_res = supabase.table("sessions").select("*", count="exact").execute()
-    turns_res = supabase.table("turns").select("*").execute()
-
-    total_sessions = sessions_res.count or 0
-    turns = turns_res.data or []
-    total_turns = len(turns)
-
-    latencies = [t["latency_ms"] for t in turns if t.get("latency_ms") is not None]
-    avg_latency = sum(latencies) / len(latencies) if latencies else 0.0
-    interruptions = sum(1 for t in turns if t.get("interrupted"))
-
     now = datetime.now(timezone.utc)
-    recent = [s for s in (sessions_res.data or []) if datetime.fromisoformat(s["started_at"]) > now - timedelta(days=7)]
-    avg_duration = 0.0
-    if recent:
+
+    sessions = supabase.table("sessions").select("*").execute().data or []
+    messages = supabase.table("messages").select("latency_ms, sentiment, interrupted").execute().data or []
+
+    result = await insights_graph.ainvoke({"sessions": sessions, "messages": messages})
+    insights = result.get("insights", {})
+
+    if not insights:
+        total_sessions = len(sessions)
+        total_messages = len(messages)
+        latencies = [m["latency_ms"] for m in messages if m.get("latency_ms") is not None]
+        avg_latency = sum(latencies) / len(latencies) if latencies else 0
+        sentiments = [m["sentiment"] for m in messages if m.get("sentiment")]
+        sentiment_breakdown = {s: sentiments.count(s) for s in set(sentiments) if s}
         durations = []
-        for s in recent:
-            if s.get("ended_at"):
-                start = datetime.fromisoformat(s["started_at"])
-                end = datetime.fromisoformat(s["ended_at"])
-                durations.append((end - start).total_seconds())
-        avg_duration = sum(durations) / len(durations) if durations else 0.0
+        for s in sessions:
+            started = s.get("started_at")
+            ended = s.get("ended_at")
+            if started and ended:
+                try:
+                    start_dt = datetime.fromisoformat(started)
+                    end_dt = datetime.fromisoformat(ended)
+                    durations.append((end_dt - start_dt).total_seconds())
+                except Exception:
+                    pass
+        avg_duration = sum(durations) / len(durations) if durations else 0
+        insights = {
+            "total_sessions": total_sessions,
+            "total_messages": total_messages,
+            "avg_latency_ms": round(avg_latency, 2),
+            "avg_session_duration_s": round(avg_duration, 2),
+            "sentiment_breakdown": sentiment_breakdown,
+            "interruption_count": sum(1 for m in messages if m.get("interrupted")),
+            "anomalies": [],
+        }
 
-    sentiments = {}
-    for t in turns:
-        s = t.get("sentiment") or "neutral"
-        sentiments[s] = sentiments.get(s, 0) + 1
-
-    return Analytics(
-        total_sessions=total_sessions,
-        total_turns=total_turns,
-        avg_latency_ms=avg_latency,
-        interruption_count=interruptions,
-        avg_session_duration_s=avg_duration,
-        sentiment_breakdown=sentiments,
-    )
+    return insights

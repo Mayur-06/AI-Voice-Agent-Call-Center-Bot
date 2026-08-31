@@ -24,7 +24,7 @@ async def test_retrieve_context_success(mock_settings):
     })
     with patch("httpx.AsyncClient.post", return_value=mock_response):
         result = await retrieve_context("query text", top_k=2)
-    assert result == ["chunk1"]
+    assert result == ["doc1", "doc2"]
 
 
 @pytest.mark.asyncio

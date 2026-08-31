@@ -90,17 +90,19 @@ async def retrieve_context(query: str, top_k: int = 3) -> list[str]:
             )
             response.raise_for_status()
             data = response.json()
-            return [doc[0] for doc in data.get("ids", [[]])]
+            documents = data.get("documents", [[]])
+            if documents:
+                return documents[0]
     except Exception:
         try:
             _, collection = _get_client()
             results = collection.query(query_texts=[query], n_results=top_k)
-            ids = results.get("ids", [[]])
-            if ids:
-                return ids[0]
+            documents = results.get("documents", [[]])
+            if documents:
+                return documents[0]
         except Exception:
             pass
-        return []
+    return []
 
 
 def generate_embeddings(texts: list[str]) -> list[list[float]]:
@@ -112,7 +114,11 @@ def generate_embeddings(texts: list[str]) -> list[list[float]]:
 async def index_document_chunks(document_id: str, chunks: list[str]):
     if not chunks:
         return
-    embeddings = generate_embeddings(chunks)
+    try:
+        loop = asyncio.get_running_loop()
+        embeddings = await loop.run_in_executor(None, generate_embeddings, chunks)
+    except Exception as exc:
+        raise RuntimeError(f"Embedding generation failed: {exc}") from exc
     try:
         async with httpx.AsyncClient() as client:
             await client.post(
