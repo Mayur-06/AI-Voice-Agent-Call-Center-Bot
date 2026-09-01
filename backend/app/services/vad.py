@@ -4,12 +4,10 @@ from app.config import settings
 
 
 class VADBuffer:
-    def __init__(self, sample_rate: int, frame_duration_ms: int = 30, padding_ms: int = 300, ratio: float = 0.75):
+    def __init__(self, sample_rate: int, frame_duration_ms: int = 30):
         self.vad = webrtcvad.Vad(settings.vad_aggressiveness)
         self.sample_rate = sample_rate
         self.frame_duration_ms = frame_duration_ms
-        self.padding_ms = padding_ms
-        self.ratio = ratio
         self.buffer: collections.deque = collections.deque()
         self.triggered = False
         self.speech_frames: collections.deque = collections.deque()

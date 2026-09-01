@@ -15,7 +15,7 @@ async def test_create_session(mock_settings):
         {"id": "session-1"}
     ]
     with patch("app.services.session.get_supabase", return_value=mock_supabase):
-        session_id = await create_session("persona-1", user_id="user-1", metadata={"key": "value"})
+        session_id = await create_session("persona-1")
     assert session_id == "session-1"
 
 
@@ -24,7 +24,7 @@ async def test_save_turn(mock_settings):
     mock_supabase = MagicMock()
     with patch("app.services.session.get_supabase", return_value=mock_supabase):
         await save_turn("session-1", "user", "Hello", sentiment="neutral", latency_ms=100)
-    mock_supabase.table.assert_called_with("turns")
+    mock_supabase.table.assert_called_with("messages")
 
 
 @pytest.mark.asyncio

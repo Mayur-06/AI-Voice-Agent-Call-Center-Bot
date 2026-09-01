@@ -41,7 +41,7 @@ def _vad_side_effect(audio_chunk: bytes):
 
 
 def _get_session_logs(session_id: str):
-    from app.websocket.handler import session_logs
+    from app.websocket.manager import session_logs
     return list(session_logs.get(session_id, []))
 
 
@@ -57,16 +57,20 @@ async def test_pipeline_audio_to_llm_to_speech():
     audio_chunk = _make_pcm_chunk(250)
 
     with patch("app.websocket.handler.manager") as mock_manager, \
-         patch("app.websocket.handler.create_session", new_callable=AsyncMock) as mock_create_session, \
-         patch("app.websocket.handler.end_session", new_callable=AsyncMock) as mock_end_session, \
+         patch("app.services.voice_pipeline.manager") as mock_vp_manager, \
+         patch("app.services.session.create_session", new_callable=AsyncMock) as mock_create_session, \
+         patch("app.services.session.end_session", new_callable=AsyncMock) as mock_end_session, \
          patch("app.websocket.handler.VADBuffer") as mock_vad_cls, \
          patch("app.websocket.handler.pcm_to_wav") as mock_convert, \
          patch("app.websocket.handler.decode_to_pcm") as mock_decode, \
          patch("app.websocket.handler.transcribe_audio") as mock_stt, \
-         patch("app.websocket.handler.retrieve_context") as mock_rag, \
-         patch("app.websocket.handler.generate_response_stream") as mock_llm_stream, \
-         patch("app.websocket.handler.synthesize_speech_stream") as mock_tts_stream, \
-         patch("app.websocket.handler.save_turn", new_callable=AsyncMock):
+         patch("app.websocket.handler.save_session_recording", new_callable=AsyncMock), \
+         patch("app.services.voice_pipeline.analyze_sentiment", new_callable=AsyncMock) as mock_analyze_sentiment, \
+         patch("app.services.voice_pipeline.retrieve_context", new_callable=AsyncMock) as mock_rag, \
+         patch("app.services.voice_pipeline.generate_response_stream") as mock_llm_stream, \
+         patch("app.services.voice_pipeline.split_sentences", new_callable=AsyncMock) as mock_split_sentences, \
+         patch("app.services.voice_pipeline.synthesize_speech_stream") as mock_tts_stream, \
+         patch("app.services.voice_pipeline.save_turn", new_callable=AsyncMock):
 
         mock_vad = MagicMock()
         mock_vad.process = MagicMock(side_effect=_vad_side_effect(audio_chunk))
@@ -86,6 +90,9 @@ async def test_pipeline_audio_to_llm_to_speech():
             yield b"tts-audio-bytes"
 
         mock_tts_stream.return_value = mock_tts_stream_fn()
+
+        mock_analyze_sentiment.return_value = "neutral"
+        mock_split_sentences.return_value = ["According to the document, the policy is 20 days."]
 
         mock_create_session.return_value = "session-1"
         mock_manager.connect = AsyncMock()
@@ -122,7 +129,6 @@ async def test_pipeline_audio_to_llm_to_speech():
     mock_tts_stream.assert_called_once()
     mock_create_session.assert_called_once_with(
         persona_id="default",
-        user_id="anonymous",
         session_id="session-1",
     )
     mock_manager.send_bytes.assert_called_once_with("session-1", b"tts-audio-bytes")
@@ -138,12 +144,15 @@ async def test_pipeline_text_transcript_flow():
     mock_ws = AsyncMock(spec=WebSocket)
 
     with patch("app.websocket.handler.manager") as mock_manager, \
-         patch("app.websocket.handler.create_session", new_callable=AsyncMock) as mock_create_session, \
-         patch("app.websocket.handler.end_session", new_callable=AsyncMock) as mock_end_session, \
-         patch("app.websocket.handler.retrieve_context") as mock_rag, \
-         patch("app.websocket.handler.generate_response_stream") as mock_llm_stream, \
-         patch("app.websocket.handler.synthesize_speech_stream") as mock_tts_stream, \
-         patch("app.websocket.handler.save_turn", new_callable=AsyncMock):
+         patch("app.services.voice_pipeline.manager") as mock_vp_manager, \
+         patch("app.services.session.create_session", new_callable=AsyncMock) as mock_create_session, \
+         patch("app.services.session.end_session", new_callable=AsyncMock) as mock_end_session, \
+         patch("app.services.voice_pipeline.analyze_sentiment", new_callable=AsyncMock) as mock_analyze_sentiment, \
+         patch("app.services.voice_pipeline.retrieve_context", new_callable=AsyncMock) as mock_rag, \
+         patch("app.services.voice_pipeline.generate_response_stream") as mock_llm_stream, \
+         patch("app.services.voice_pipeline.split_sentences", new_callable=AsyncMock) as mock_split_sentences, \
+         patch("app.services.voice_pipeline.synthesize_speech_stream") as mock_tts_stream, \
+         patch("app.services.voice_pipeline.save_turn", new_callable=AsyncMock):
 
         mock_rag.return_value = [{"text": "Document says refunds take 5-7 days."}]
 
@@ -156,6 +165,9 @@ async def test_pipeline_text_transcript_flow():
             yield b"tts-audio"
 
         mock_tts_stream.return_value = mock_tts_stream_fn()
+
+        mock_analyze_sentiment.return_value = "neutral"
+        mock_split_sentences.return_value = ["Refunds take 5-7 business days."]
 
         mock_create_session.return_value = "session-1"
         mock_manager.connect = AsyncMock()
@@ -182,7 +194,6 @@ async def test_pipeline_text_transcript_flow():
 
     mock_create_session.assert_called_once_with(
         persona_id="default",
-        user_id="anonymous",
         session_id="session-1",
     )
     mock_manager.send_bytes.assert_called_once_with("session-1", b"tts-audio")
@@ -204,7 +215,9 @@ async def test_pipeline_empty_transcript():
          patch("app.websocket.handler.pcm_to_wav") as mock_convert, \
          patch("app.websocket.handler.decode_to_pcm") as mock_decode, \
          patch("app.websocket.handler.transcribe_audio") as mock_stt, \
-         patch("app.websocket.handler.save_turn", new_callable=AsyncMock):
+         patch("app.websocket.handler.save_session_recording", new_callable=AsyncMock), \
+         patch("app.services.voice_pipeline.analyze_sentiment", new_callable=AsyncMock) as mock_analyze_sentiment, \
+         patch("app.services.voice_pipeline.save_turn", new_callable=AsyncMock):
 
         mock_vad = MagicMock()
         mock_vad.process = MagicMock(return_value=(b"audio", True))
@@ -213,6 +226,7 @@ async def test_pipeline_empty_transcript():
         mock_decode.return_value = _make_pcm_chunk(250)
         mock_convert.return_value = b"wav-audio"
         mock_stt.return_value = ""
+        mock_analyze_sentiment.return_value = "neutral"
 
         mock_create_session.return_value = "db-session-1"
         mock_manager.connect = AsyncMock()
@@ -260,6 +274,5 @@ async def test_pipeline_auth_flow():
     assert any("WS disconnected" in m for m in messages)
     mock_create_session.assert_called_once_with(
         persona_id="default",
-        user_id="anonymous",
         session_id="session-1",
     )

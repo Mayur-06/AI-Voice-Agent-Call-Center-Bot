@@ -1,3 +1,4 @@
+import re
 import httpx
 from app.config import settings
 
@@ -18,3 +19,15 @@ async def transcribe_audio(audio_bytes: bytes, language: str = "en") -> str:
         response.raise_for_status()
         result = response.json()
         return result.get("text", "")
+
+
+def is_noisy_transcription(text: str) -> bool:
+    if not text:
+        return True
+    stripped = text.strip()
+    if len(stripped) < 2:
+        return True
+    alphabetic = sum(c.isalpha() for c in stripped)
+    if alphabetic / max(len(stripped), 1) < 0.5:
+        return True
+    return False

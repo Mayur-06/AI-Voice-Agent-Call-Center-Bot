@@ -63,7 +63,7 @@ async def main():
         
         await ws_router.routes[0].endpoint(mock_ws, 'session-1')
 
-    from app.websocket.handler import session_logs
+    from app.websocket.manager import session_logs
     logs = session_logs.get('session-1', [])
     for entry in logs:
         print(entry['msg'])

@@ -1,4 +1,4 @@
-from app.services.audio import convert_to_wav
+from app.services.audio_processor import convert_to_wav
 
 
 def ensure_wav_16k(audio_bytes: bytes) -> bytes:
