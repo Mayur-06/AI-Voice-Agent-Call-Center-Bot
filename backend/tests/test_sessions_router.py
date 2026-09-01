@@ -6,16 +6,10 @@ import pytest
 from unittest.mock import MagicMock, patch, AsyncMock
 from fastapi.testclient import TestClient
 from app.main import app
-from app.routers.auth import get_current_user
-
-
-class MockUser:
-    id = "test-user-id"
 
 
 @pytest.fixture
 def client():
-    app.dependency_overrides[get_current_user] = lambda: MockUser()
     return TestClient(app)
 
 
@@ -36,7 +30,7 @@ async def test_create_session(client):
 async def test_list_sessions(client):
     with patch("app.routers.sessions.get_supabase") as mock_get_supabase:
         mock_supabase = MagicMock()
-        mock_supabase.table.return_value.select.return_value.eq.return_value.order.return_value.execute.return_value.data = [
+        mock_supabase.table.return_value.select.return_value.order.return_value.execute.return_value.data = [
             {"id": "session-1", "persona_id": "persona-1", "user_id": "test-user-id", "started_at": "2024-01-01T00:00:00", "metadata": {}}
         ]
         mock_get_supabase.return_value = mock_supabase
@@ -49,7 +43,7 @@ async def test_list_sessions(client):
 async def test_get_session(client):
     with patch("app.routers.sessions.get_supabase") as mock_get_supabase:
         mock_supabase = MagicMock()
-        mock_supabase.table.return_value.select.return_value.eq.return_value.eq.return_value.execute.return_value.data = [
+        mock_supabase.table.return_value.select.return_value.eq.return_value.execute.return_value.data = [
             {"id": "session-1", "persona_id": "persona-1", "user_id": "test-user-id", "started_at": "2024-01-01T00:00:00", "metadata": {}}
         ]
         mock_get_supabase.return_value = mock_supabase
@@ -62,7 +56,7 @@ async def test_get_session(client):
 async def test_get_session_not_found(client):
     with patch("app.routers.sessions.get_supabase") as mock_get_supabase:
         mock_supabase = MagicMock()
-        mock_supabase.table.return_value.select.return_value.eq.return_value.eq.return_value.execute.return_value.data = []
+        mock_supabase.table.return_value.select.return_value.eq.return_value.execute.return_value.data = []
         mock_get_supabase.return_value = mock_supabase
         response = client.get("/api/sessions/nonexistent")
     assert response.status_code == 404
@@ -72,10 +66,10 @@ async def test_get_session_not_found(client):
 async def test_delete_session(client):
     with patch("app.routers.sessions.get_supabase") as mock_get_supabase:
         mock_supabase = MagicMock()
-        mock_supabase.table.return_value.select.return_value.eq.return_value.eq.return_value.execute.return_value.data = [
+        mock_supabase.table.return_value.select.return_value.eq.return_value.execute.return_value.data = [
             {"id": "session-1"}
         ]
-        mock_supabase.table.return_value.delete.return_value.execute.return_value.data = []
+        mock_supabase.table.return_value.delete.return_value.eq.return_value.execute.return_value.data = []
         mock_get_supabase.return_value = mock_supabase
         response = client.delete("/api/sessions/session-1")
     assert response.status_code == 200
@@ -89,7 +83,7 @@ async def test_send_message(client):
          patch("app.routers.sessions.generate_response", new_callable=AsyncMock) as mock_generate:
         mock_generate.return_value = "Hello there!"
         mock_supabase = MagicMock()
-        mock_supabase.table.return_value.select.return_value.eq.return_value.eq.return_value.execute.return_value.data = [
+        mock_supabase.table.return_value.select.return_value.eq.return_value.execute.return_value.data = [
             {"id": "session-1"}
         ]
         mock_get_supabase.return_value = mock_supabase
@@ -102,7 +96,7 @@ async def test_send_message(client):
 async def test_get_transcript(client):
     with patch("app.routers.sessions.get_supabase") as mock_get_supabase:
         mock_supabase = MagicMock()
-        mock_supabase.table.return_value.select.return_value.eq.return_value.eq.return_value.execute.return_value.data = [
+        mock_supabase.table.return_value.select.return_value.eq.return_value.execute.return_value.data = [
             {"id": "session-1"}
         ]
         mock_supabase.table.return_value.select.return_value.eq.return_value.order.return_value.execute.return_value.data = [
@@ -118,7 +112,7 @@ async def test_get_transcript(client):
 async def test_get_summary(client):
     with patch("app.routers.sessions.get_supabase") as mock_get_supabase:
         mock_supabase = MagicMock()
-        mock_supabase.table.return_value.select.return_value.eq.return_value.eq.return_value.execute.return_value.data = [
+        mock_supabase.table.return_value.select.return_value.eq.return_value.execute.return_value.data = [
             {"id": "session-1"}
         ]
         mock_supabase.table.return_value.select.return_value.eq.return_value.execute.return_value.data = []
@@ -132,7 +126,7 @@ async def test_get_summary(client):
 async def test_get_sentiment(client):
     with patch("app.routers.sessions.get_supabase") as mock_get_supabase:
         mock_supabase = MagicMock()
-        mock_supabase.table.return_value.select.return_value.eq.return_value.eq.return_value.execute.return_value.data = [
+        mock_supabase.table.return_value.select.return_value.eq.return_value.execute.return_value.data = [
             {"id": "session-1"}
         ]
         mock_supabase.table.return_value.select.return_value.eq.return_value.execute.return_value.data = [
@@ -148,7 +142,7 @@ async def test_get_sentiment(client):
 async def test_get_metrics(client):
     with patch("app.routers.sessions.get_supabase") as mock_get_supabase:
         mock_supabase = MagicMock()
-        mock_supabase.table.return_value.select.return_value.eq.return_value.eq.return_value.execute.return_value.data = [
+        mock_supabase.table.return_value.select.return_value.eq.return_value.execute.return_value.data = [
             {"id": "session-1"}
         ]
         mock_supabase.table.return_value.select.return_value.eq.return_value.execute.return_value.data = [
@@ -168,7 +162,7 @@ async def test_get_metrics(client):
 async def test_get_metrics_no_turns(client):
     with patch("app.routers.sessions.get_supabase") as mock_get_supabase:
         mock_supabase = MagicMock()
-        mock_supabase.table.return_value.select.return_value.eq.return_value.eq.return_value.execute.return_value.data = [
+        mock_supabase.table.return_value.select.return_value.eq.return_value.execute.return_value.data = [
             {"id": "session-1"}
         ]
         mock_supabase.table.return_value.select.return_value.eq.return_value.execute.return_value.data = []
@@ -182,7 +176,7 @@ async def test_get_metrics_no_turns(client):
 async def test_get_recording(client):
     with patch("app.routers.sessions.get_supabase") as mock_get_supabase:
         mock_supabase = MagicMock()
-        mock_supabase.table.return_value.select.return_value.eq.return_value.eq.return_value.execute.return_value.data = [
+        mock_supabase.table.return_value.select.return_value.eq.return_value.execute.return_value.data = [
             {"id": "session-1"}
         ]
         mock_get_supabase.return_value = mock_supabase

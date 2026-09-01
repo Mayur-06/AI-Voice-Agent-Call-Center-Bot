@@ -19,7 +19,7 @@ def mock_settings():
         mock.vad_aggressiveness = 2
         mock.silence_threshold_ms = 1500
         mock.audio_chunk_ms = 250
-        mock.gemini_model = "gemini-3.6-flash"
+        mock.gemini_model = "gemini-1.5-flash"
         mock.hf_token = ""
         mock.hf_hub_disable_symlinks_warning = False
         mock.embedding_device = "cpu"

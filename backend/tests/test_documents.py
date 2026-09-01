@@ -7,18 +7,12 @@ import pytest
 from unittest.mock import MagicMock, patch, AsyncMock
 from fastapi.testclient import TestClient
 from app.main import app
-from app.routers.auth import get_current_user
 from app.routers.documents import router as documents_router
-from app.models.schemas import Document
-
-
-class MockUser:
-    id = "test-user-id"
+from app.schemas import Document
 
 
 @pytest.fixture
 def client():
-    app.dependency_overrides[get_current_user] = lambda: MockUser()
     return TestClient(app)
 
 
