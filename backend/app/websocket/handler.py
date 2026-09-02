@@ -2,38 +2,25 @@ import json
 import logging
 import asyncio
 import time
+import uuid
 from contextlib import suppress
 from datetime import datetime, timezone
-from collections import deque
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
-from app.websocket.manager import manager
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from app.websocket.manager import manager, _append_log
 from app.services.vad import VADBuffer
-from app.services.audio import convert_to_wav, decode_to_pcm, pcm_to_wav
-from app.services.stt import transcribe_audio
-from app.services.llm import generate_response, generate_response_stream
-from app.services.tts import synthesize_speech, synthesize_speech_stream
-from app.services.rag import retrieve_context
-from app.services.sentences import split_sentences
-from app.services.session import save_turn, end_session, create_session
-from app.services.sentiment_analyzer import analyze_sentiment
-from app.services.audio_processor import save_session_recording
+from app.services.audio_processor import decode_to_pcm, pcm_to_wav
+from app.services.stt import transcribe_audio, is_noisy_transcription
+from app.services.conversation_mgr import ConversationManager
+from app.services.voice_pipeline import process_turn
+from app.websocket.audio_buffer import AudioBuffer
 from app.services.call_summarizer import generate_call_summary
+from app.services.audio_processor import save_session_recording
+from app.services.session import create_session, end_session
 from app.config import settings
 from app.models.database import get_supabase
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
-
-SESSION_LOG_MAX = 200
-session_logs: dict[str, deque[dict]] = {}
-session_log_events: dict[str, list[asyncio.Event]] = {}
-
-
-async def _append_log(session_id: str, entry: dict) -> None:
-    logs = session_logs.setdefault(session_id, deque(maxlen=SESSION_LOG_MAX))
-    logs.append(entry)
-    for ev in list(session_log_events.get(session_id, [])):
-        ev.set()
 
 
 async def _get_default_persona_id() -> str:
@@ -53,103 +40,18 @@ async def _get_default_persona_id() -> str:
     return "default"
 
 
-async def _stream_session_logs(session_id: str):
-    ev = asyncio.Event()
-    session_log_events.setdefault(session_id, []).append(ev)
+async def _load_session(session_id: str) -> dict | None:
+    supabase = get_supabase()
     try:
-        for entry in list(session_logs.get(session_id, [])):
-            yield f"data: {json.dumps(entry)}\n\n"
-        while True:
-            await ev.wait()
-            ev.clear()
-            while session_logs.get(session_id):
-                entry = session_logs[session_id].popleft()
-                yield f"data: {json.dumps(entry)}\n\n"
-    finally:
-        session_log_events.get(session_id, []).remove(ev)
+        res = supabase.table("sessions").select("*").eq("id", session_id).limit(1).execute()
+        if res.data:
+            return res.data[0]
+    except Exception:
+        pass
+    return None
 
 
-async def _stream_sentence_audio(session_id: str, sentence: str, voice_id: str, sentence_index: int):
-    await manager.send_json(session_id, {"type": "status", "message": "speaking", "sentence_index": sentence_index})
-    await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "info", "msg": f"WS TTS sentence session={session_id} index={sentence_index} text={sentence}"})
-    audio_buffer = bytearray()
-    try:
-        async for audio_chunk in synthesize_speech_stream(sentence, voice_id):
-            audio_buffer.extend(audio_chunk)
-    except asyncio.CancelledError:
-        raise
-    except asyncio.TimeoutError:
-        await manager.send_json(session_id, {"type": "error", "message": "tts_timeout"})
-        await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "error", "msg": f"WS TTS timeout session={session_id} sentence={sentence_index}"})
-        return
-    except Exception as exc:
-        await manager.send_json(session_id, {"type": "error", "message": f"tts_failed:{str(exc)}"})
-        await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "error", "msg": f"WS TTS failed session={session_id} sentence={sentence_index} error={exc}"})
-        return
-    if audio_buffer:
-        await manager.send_bytes(session_id, bytes(audio_buffer))
-    await manager.send_json(session_id, {"type": "sentence_end", "text": sentence, "index": sentence_index})
-    await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "info", "msg": f"WS sentence sent session={session_id} index={sentence_index} text={sentence}"})
-
-
-async def _stream_response(session_id: str, conversation: list[dict[str, str]], voice_id: str, system_instruction: str = "You are a helpful voice assistant.", partial_response_ref: dict | None = None) -> tuple[str, bool]:
-    await manager.send_json(session_id, {"type": "status", "message": "thinking"})
-    await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "info", "msg": f"WS LLM stream started session={session_id}"})
-
-    full_response = ""
-    if partial_response_ref is not None:
-        partial_response_ref["text"] = ""
-    tts_queue: asyncio.Queue[tuple[str, int] | None] = asyncio.Queue()
-    sentences_sent = 0
-    timeout_error = False
-    worker: asyncio.Task | None = None
-
-    async def tts_worker():
-        nonlocal sentences_sent
-        while True:
-            item = await tts_queue.get()
-            if item is None:
-                break
-            sentence, idx = item
-            await _stream_sentence_audio(session_id, sentence, voice_id, idx)
-            sentences_sent += 1
-            tts_queue.task_done()
-
-    try:
-        worker = asyncio.create_task(tts_worker())
-        async for chunk in generate_response_stream(conversation, system_instruction):
-            full_response += chunk
-            if partial_response_ref is not None:
-                partial_response_ref["text"] = full_response
-            sentences = await split_sentences(full_response)
-            while len(sentences) > 1:
-                sentence = sentences.pop(0)
-                full_response = full_response[len(sentence):].lstrip()
-                await tts_queue.put((sentence, sentences_sent))
-    except asyncio.TimeoutError:
-        timeout_error = True
-        await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "error", "msg": f"WS LLM timeout session={session_id}"})
-        if not full_response:
-            full_response = "I'm sorry, I'm taking too long to respond. Please try again."
-    finally:
-        if worker is not None:
-            worker.cancel()
-            with suppress(asyncio.CancelledError):
-                await worker
-            with suppress(asyncio.CancelledError):
-                while not tts_queue.empty():
-                    tts_queue.get_nowait()
-
-    if full_response.strip():
-        await _stream_sentence_audio(session_id, full_response.strip(), voice_id, sentences_sent)
-        sentences_sent += 1
-
-    await manager.send_json(session_id, {"type": "status", "message": "response_ready"})
-    await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "info", "msg": f"WS response ready session={session_id} text={full_response} timeout={timeout_error}"})
-    return full_response, timeout_error
-
-
-async def _process_audio_chunk(session_id: str, chunk: bytes, vad: VADBuffer, conversation: list, db_session_id: str, voice_id: str, current_turn_task_ref: dict):
+async def _process_audio_chunk(session_id: str, chunk: bytes, vad: VADBuffer, conversation_mgr: ConversationManager, db_session_id: str, voice_id: str, current_turn_task_ref: dict):
     await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "info", "msg": f"WS audio chunk session={session_id} bytes={len(chunk)}"})
     await manager.send_json(session_id, {"type": "status", "message": "upload_received"})
 
@@ -227,78 +129,37 @@ async def _process_audio_chunk(session_id: str, chunk: bytes, vad: VADBuffer, co
     return None
 
 
-async def _process_transcript(session_id: str, user_text: str, conversation: list, db_session_id: str, voice_id: str, current_turn_task_ref: dict):
-    await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "info", "msg": f"WS transcript session={session_id} text={user_text}"})
-    await manager.send_json(session_id, {"type": "transcript", "role": "user", "text": user_text, "timestamp": datetime.now(timezone.utc).isoformat()})
-    conversation.append({"role": "user", "content": user_text})
-
-    sentiment = "neutral"
-    try:
-        sentiment = await analyze_sentiment(user_text)
-    except Exception:
-        pass
-    await manager.send_json(session_id, {"type": "sentiment", "label": sentiment})
-    if sentiment == "frustrated":
-        await manager.send_json(session_id, {"type": "alert", "level": "warning", "message": "Frustration detected! Escalating agent tone."})
-
-    await save_turn(db_session_id, "user", user_text, sentiment=sentiment, latency_ms=0)
-
-    await manager.send_json(session_id, {"type": "status", "message": "retrieving_context"})
-    try:
-        context = await asyncio.wait_for(retrieve_context(user_text), timeout=10)
-    except asyncio.TimeoutError:
-        context = []
-        await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "warning", "msg": f"WS RAG timeout session={session_id}"})
-    await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "info", "msg": f"WS RAG context session={session_id} chunks={len(context) if context else 0}"})
-
-    system_instruction = "You are a helpful voice assistant."
-    if context:
-        context_str = "\n".join([f"- {chunk}" for chunk in context])
-        system_instruction += (
-            "\n\nUse the following reference documents to answer the user's question:\n"
-            f"{context_str}\n\n"
-            "INSTRUCTION: Cite your sources naturally in spoken prose (for example, 'According to the uploaded agreement...'). "
-            "Do NOT use markdown footnotes like [1] or formatted brackets."
-        )
-
-    turn_start = time.perf_counter()
-    partial_response_container = {"text": ""}
-    current_turn_task_ref["task"] = asyncio.create_task(_stream_response(session_id, conversation, voice_id, system_instruction, partial_response_container))
-    try:
-        response_text, _ = await asyncio.wait_for(current_turn_task_ref["task"], timeout=30)
-    except asyncio.TimeoutError:
-        await manager.send_json(session_id, {"type": "error", "message": "llm_timeout"})
-        await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "error", "msg": f"WS LLM timeout session={session_id}"})
-        response_text = "I'm sorry, I'm taking too long to respond. Please try again."
-    except asyncio.CancelledError:
-        await manager.send_json(session_id, {"type": "status", "message": "interrupted"})
-        await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "warning", "msg": f"WS turn cancelled session={session_id}"})
-        partial_text = partial_response_container.get("text", "").strip()
-        if partial_text:
-            await save_turn(db_session_id, "assistant", partial_text + "...", interrupted=True)
-        return None
-    finally:
-        current_turn_task_ref["task"] = None
-
-    conversation.append({"role": "assistant", "content": response_text})
-    latency_ms = int((time.perf_counter() - turn_start) * 1000)
-    await manager.send_json(session_id, {"type": "transcript", "role": "assistant", "text": response_text, "timestamp": datetime.now(timezone.utc).isoformat()})
-    await save_turn(db_session_id, "assistant", response_text, latency_ms=latency_ms, interrupted=False)
-    return response_text
-
-
 @router.websocket("/ws/voice/{session_id}")
 async def websocket_voice(websocket: WebSocket, session_id: str):
     await manager.connect(session_id, websocket)
     await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "info", "msg": f"WS connected session={session_id}"})
 
-    persona_id = await _get_default_persona_id()
-    db_session_id = await create_session(persona_id=persona_id, session_id=session_id)
+    try:
+        persona_id = await _get_default_persona_id()
+        anonymous_user_id = str(uuid.uuid4())
+        db_session_id = await create_session(persona_id=persona_id, user_id=anonymous_user_id, session_id=session_id)
+        existing_session = await _load_session(db_session_id)
+        voice_id = "en-IN-NeerjaNeural"
+        if existing_session and existing_session.get("selected_voice"):
+            voice_id = existing_session["selected_voice"]
+    except Exception as exc:
+        await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "error", "msg": f"WS session init failed session={session_id} error={exc}"})
+        try:
+            await manager.send_json(session_id, {"type": "error", "message": f"session_init_failed:{type(exc).__name__}"})
+        except Exception:
+            pass
+        manager.disconnect(session_id)
+        return
+
     await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "info", "msg": f"WS db session created session={session_id} db_session={db_session_id} persona={persona_id}"})
 
     vad = VADBuffer(sample_rate=settings.audio_sample_rate)
-    conversation: list[dict[str, str]] = []
-    voice_id = "en-IN-NeerjaNeural"
+    conversation_mgr = ConversationManager()
+    if existing_session:
+        try:
+            await conversation_mgr.load_from_db(db_session_id)
+        except Exception:
+            pass
     is_playing = False
     filler_sent = False
     current_turn_task_ref: dict[str, asyncio.Task | None] = {"task": None}
@@ -306,51 +167,84 @@ async def websocket_voice(websocket: WebSocket, session_id: str):
     message_queue: asyncio.Queue[dict | None] = asyncio.Queue()
     receiver_task: asyncio.Task | None = None
     audio_tasks: set[asyncio.Task] = set()
-    session_audio_bytes = bytearray()
-    MAX_CONCURRENT_AUDIO_TASKS = 2
+    session_audio_bytes = AudioBuffer()
+    heartbeat_task: asyncio.Task | None = None
+
+    async def _heartbeat():
+        while True:
+            await asyncio.sleep(settings.ws_heartbeat_interval_s)
+            try:
+                await websocket.send_ping()
+            except Exception:
+                await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "warning", "msg": f"WS heartbeat failed session={session_id}"})
+                await message_queue.put(None)
+                break
 
     async def _receive_messages():
         while True:
             try:
-                message = await asyncio.wait_for(websocket.receive(), timeout=60.0)
+                message = await asyncio.wait_for(websocket.receive(), timeout=settings.ws_receive_timeout_s)
                 await message_queue.put(message)
             except asyncio.TimeoutError:
-                await message_queue.put({"type": "ping"})
+                try:
+                    await websocket.send_ping()
+                except Exception:
+                    await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "warning", "msg": f"WS stale connection detected session={session_id}"})
+                    await message_queue.put(None)
+                    break
             except WebSocketDisconnect:
                 await message_queue.put(None)
+                break
+            except asyncio.CancelledError:
                 break
             except RuntimeError as exc:
                 await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "warning", "msg": f"WS receive error session={session_id} error={exc}"})
                 break
+            except Exception as exc:
+                await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "warning", "msg": f"WS receive unexpected error session={session_id} error={exc}"})
+                break
 
     async def _handle_audio_message(chunk: bytes):
         async with processing_lock:
-            session_audio_bytes.extend(chunk)
-            audio_data = await _process_audio_chunk(session_id, chunk, vad, conversation, db_session_id, voice_id, current_turn_task_ref)
+            session_audio_bytes.append(chunk)
+            audio_data = await _process_audio_chunk(session_id, chunk, vad, conversation_mgr, db_session_id, voice_id, current_turn_task_ref)
             if audio_data:
                 await manager.send_json(session_id, {"type": "status", "message": "processing"})
                 await manager.send_json(session_id, {"type": "status", "message": "transcribing"})
                 await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "info", "msg": f"WS speech ended session={session_id} audio_len={len(audio_data)}"})
                 wav_audio = pcm_to_wav(audio_data, sample_rate=settings.audio_sample_rate)
                 try:
+                    stt_start = time.perf_counter()
                     user_text = await asyncio.wait_for(transcribe_audio(wav_audio), timeout=15)
+                    stt_latency_ms = int((time.perf_counter() - stt_start) * 1000)
                 except asyncio.TimeoutError:
                     await manager.send_json(session_id, {"type": "error", "message": "stt_timeout"})
                     await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "error", "msg": f"WS STT timeout session={session_id}"})
                     return
-                await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "info", "msg": f"WS STT session={session_id} text={user_text}"})
+                await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "info", "msg": f"WS STT session={session_id} text={user_text} latency_ms={stt_latency_ms}"})
                 await manager.send_json(session_id, {"type": "status", "message": "transcribed"})
-                if not user_text:
+                if not user_text or is_noisy_transcription(user_text):
                     await manager.send_json(session_id, {"type": "error", "message": "empty_transcript"})
                     await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "warning", "msg": f"WS empty transcript session={session_id}"})
                     return
-                await _process_transcript(session_id, user_text, conversation, db_session_id, voice_id, current_turn_task_ref)
+                current_turn_task_ref["task"] = asyncio.create_task(process_turn(session_id, user_text, conversation_mgr, voice_id, persona_id, db_session_id, stt_latency_ms=stt_latency_ms))
+                try:
+                    await asyncio.wait_for(current_turn_task_ref["task"], timeout=30)
+                except asyncio.TimeoutError:
+                    await manager.send_json(session_id, {"type": "error", "message": "llm_timeout"})
+                    await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "error", "msg": f"WS LLM timeout session={session_id}"})
+                except asyncio.CancelledError:
+                    pass
+                except Exception as exc:
+                    await manager.send_json(session_id, {"type": "error", "message": f"turn_failed:{type(exc).__name__}"})
+                    await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "error", "msg": f"WS turn failed session={session_id} error={exc}"})
 
     try:
         await manager.send_json(session_id, {"type": "status", "message": "connected"})
         await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "info", "msg": f"WS status connected session={session_id}"})
 
         receiver_task = asyncio.create_task(_receive_messages())
+        heartbeat_task = asyncio.create_task(_heartbeat())
 
         while True:
             message = await message_queue.get()
@@ -399,11 +293,31 @@ async def websocket_voice(websocket: WebSocket, session_id: str):
                     user_text = data.get("text", "")
                     if not user_text:
                         continue
-                    await _process_transcript(session_id, user_text, conversation, db_session_id, voice_id, current_turn_task_ref)
+                    current_turn_task_ref["task"] = asyncio.create_task(process_turn(session_id, user_text, conversation_mgr, voice_id, persona_id, db_session_id, stt_latency_ms=None))
+                    try:
+                        await asyncio.wait_for(current_turn_task_ref["task"], timeout=30)
+                    except asyncio.TimeoutError:
+                        await manager.send_json(session_id, {"type": "error", "message": "llm_timeout"})
+                        await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "error", "msg": f"WS LLM timeout session={session_id}"})
+                    except asyncio.CancelledError:
+                        pass
+                    except Exception as exc:
+                        await manager.send_json(session_id, {"type": "error", "message": f"turn_failed:{type(exc).__name__}"})
+                        await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "error", "msg": f"WS turn failed session={session_id} error={exc}"})
+
+                elif msg_type == "ping":
+                    try:
+                        await websocket.send_text(json.dumps({"type": "pong"}))
+                    except Exception:
+                        break
 
     except WebSocketDisconnect:
         pass
     finally:
+        if heartbeat_task:
+            heartbeat_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await heartbeat_task
         for task in list(audio_tasks):
             task.cancel()
         for task in list(audio_tasks):
@@ -423,16 +337,16 @@ async def websocket_voice(websocket: WebSocket, session_id: str):
                 pass
 
         recording_url = None
-        if session_audio_bytes:
+        if len(session_audio_bytes) > 0:
             try:
-                recording_url = await save_session_recording(db_session_id, bytes(session_audio_bytes))
+                recording_url = await save_session_recording(db_session_id, session_audio_bytes.get_bytes())
             except Exception:
                 pass
 
         summary = ""
-        if conversation:
+        if len(conversation_mgr) > 0:
             try:
-                summary = await generate_call_summary(conversation)
+                summary = await generate_call_summary(conversation_mgr.get_history())
             except Exception:
                 pass
 

@@ -4,7 +4,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import struct
 import pytest
-from app.services.audio import convert_to_wav, get_duration_ms
+from app.services.audio_processor import convert_to_wav, get_duration_ms
 
 
 def _make_wav(sample_rate: int = 16000, duration_ms: int = 100) -> bytes:

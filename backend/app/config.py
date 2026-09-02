@@ -7,7 +7,7 @@ class Settings(BaseSettings):
     groq_api_key: str = ""
     google_api_key: str = ""
     chromadb_url: str = "http://localhost:8001"
-    gemini_model: str = "gemini-1.5-flash-latest"
+    gemini_model: str = "gemini-3.6-flash"
     hf_token: str = ""
     hf_hub_disable_symlinks_warning: bool = False
     embedding_device: str = "cpu"
@@ -24,6 +24,10 @@ class Settings(BaseSettings):
     vad_aggressiveness: int = 2
     silence_threshold_ms: int = 1500
     audio_chunk_ms: int = 250
+
+    ws_heartbeat_interval_s: int = 30
+    ws_receive_timeout_s: int = 60
+    ws_max_concurrent_audio_tasks: int = 2
 
 
 settings = Settings()

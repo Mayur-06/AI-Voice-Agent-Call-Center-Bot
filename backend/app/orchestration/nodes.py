@@ -9,7 +9,7 @@ _client = genai.Client(api_key=settings.google_api_key)
 
 
 async def _call_gemini(prompt: str, model: str | None = None) -> str:
-    model_name = model or settings.gemini_model
+    model_name = model or settings._model
     response = await _client.aio.models.generate_content(
         model=model_name,
         contents=[prompt],

@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    logger.info("Startup: supabase_url=%s anon_key=%s service_key=%s cwd=%s", bool(settings.supabase_url), bool(settings.supabase_anon_key), bool(settings.supabase_service_role_key), __import__("os").getcwd())
     check_chromadb_health()
     ensure_recordings_bucket()
     yield

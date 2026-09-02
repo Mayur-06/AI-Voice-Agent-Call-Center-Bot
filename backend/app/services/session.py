@@ -1,9 +1,16 @@
+import uuid
 from datetime import datetime, timezone
 from app.models.database import get_supabase
-from app.config import settings
 
 
-async def create_session(persona_id: str, metadata: dict | None = None, session_id: str | None = None) -> str:
+async def create_session(
+    persona_id: str,
+    user_id: str | None = None,
+    metadata: dict | None = None,
+    session_id: str | None = None,
+    status: str = "active",
+    selected_voice: str | None = None,
+) -> str:
     supabase = get_supabase()
 
     if session_id:
@@ -11,8 +18,13 @@ async def create_session(persona_id: str, metadata: dict | None = None, session_
         if existing.data:
             return existing.data[0]["id"]
 
+    resolved_user_id = user_id or str(uuid.uuid4())
+
     payload = {
         "persona_id": persona_id,
+        "user_id": resolved_user_id,
+        "status": status,
+        "selected_voice": selected_voice,
         "started_at": datetime.now(timezone.utc).isoformat(),
     }
     if session_id:
@@ -22,9 +34,18 @@ async def create_session(persona_id: str, metadata: dict | None = None, session_
 
 
 async def save_turn(session_id: str, speaker: str, text: str, sentiment: str | None = None,
-                    latency_ms: int | None = None, interrupted: bool = False):
+                    latency_ms: int | None = None, interrupted: bool = False,
+                    stt_latency_ms: int | None = None, llm_latency_ms: int | None = None,
+                    tts_first_audio_latency_ms: int | None = None):
     supabase = get_supabase()
-    supabase.table("messages").insert({
+    seq = 0
+    try:
+        existing = supabase.table("messages").select("sequence_number").eq("session_id", session_id).order("sequence_number", desc=True).limit(1).execute()
+        if existing.data:
+            seq = existing.data[0]["sequence_number"] + 1
+    except Exception:
+        pass
+    payload = {
         "session_id": session_id,
         "speaker": speaker,
         "text": text,
@@ -32,8 +53,18 @@ async def save_turn(session_id: str, speaker: str, text: str, sentiment: str | N
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "latency_ms": latency_ms,
         "interrupted": interrupted,
-        "sequence_number": 0,
-    }).execute()
+        "sequence_number": seq,
+        "stt_latency_ms": stt_latency_ms,
+        "llm_latency_ms": llm_latency_ms,
+        "tts_first_audio_latency_ms": tts_first_audio_latency_ms,
+    }
+    supabase.table("messages").insert(payload).execute()
+
+
+async def load_turns(session_id: str) -> list[dict[str, str]]:
+    supabase = get_supabase()
+    res = supabase.table("messages").select("speaker,text").eq("session_id", session_id).order("sequence_number").execute()
+    return [{"role": row["speaker"], "content": row["text"]} for row in (res.data or [])]
 
 
 async def end_session(session_id: str, recording_url: str | None = None, summary: str | None = None):
