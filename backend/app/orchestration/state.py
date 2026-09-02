@@ -2,24 +2,6 @@ from typing import TypedDict, Annotated, Sequence, Optional, Any
 from langgraph.graph import add_messages
 
 
-class ConversationState(TypedDict):
-    session_id: str
-    conversation: list[dict[str, str]]
-    messages: Annotated[Sequence[Any], add_messages]
-    current_turn: Optional[dict[str, Any]]
-    voice_id: str
-    persona_id: str
-    sentiment: str
-    context: list[str]
-    status: str
-    partial_response: str
-    error: Optional[str]
-    user_text: str
-    filler_message: Optional[str]
-    should_retrieve: bool
-    interrupted: bool
-
-
 class SentenceSplitterState(TypedDict):
     text: str
     sentences: list[str]

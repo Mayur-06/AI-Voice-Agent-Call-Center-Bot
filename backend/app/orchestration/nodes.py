@@ -9,7 +9,7 @@ _client = genai.Client(api_key=settings.google_api_key)
 
 
 async def _call_gemini(prompt: str, model: str | None = None) -> str:
-    model_name = model or settings._model
+    model_name = model or settings.gemini_model
     response = await _client.aio.models.generate_content(
         model=model_name,
         contents=[prompt],
@@ -304,14 +304,8 @@ async def index_node(state: dict) -> dict:
         return {**state, "status": "indexed"}
 
     try:
-        from app.services.rag import _get_client
-        _, collection = _get_client()
-        collection.add(
-            ids=[f"{document_id}_{i}" for i in range(len(chunks))],
-            documents=chunks,
-            embeddings=embeddings,
-            metadatas=[{"document_id": document_id, "chunk_index": i} for i in range(len(chunks))],
-        )
+        from app.services.rag import store_chunks_in_pinecone
+        store_chunks_in_pinecone(document_id, None, chunks, embeddings)
         return {**state, "status": "indexed"}
     except Exception as exc:
         return {**state, "error": f"Indexing failed: {exc}", "status": "error"}
@@ -329,57 +323,3 @@ async def validate_node(state: dict) -> dict:
         return {**state, "validated": False, "retries": retries + 1}
 
     return {**state, "chunks_count": chunks_count, "validated": True}
-
-
-async def preflight_node(state: dict) -> dict:
-    return {**state, "status": "preflight_complete"}
-
-
-async def audio_vad_router_node(state: dict) -> dict:
-    return {**state, "status": "vad_complete"}
-
-
-async def stt_node(state: dict) -> dict:
-    return {**state, "status": "stt_complete"}
-
-
-async def transcript_validator_node(state: dict) -> dict:
-    user_text = state.get("user_text", "")
-    if not user_text.strip():
-        return {**state, "status": "invalid_transcript"}
-    return {**state, "status": "transcript_valid"}
-
-
-async def retriever_node(state: dict) -> dict:
-    query = state.get("user_text", "")
-    try:
-        from app.services.rag import retrieve_context
-        context = await retrieve_context(query)
-    except Exception:
-        context = []
-    return {**state, "context": context}
-
-
-async def generate_response_node(state: dict) -> dict:
-    return {**state, "status": "response_ready"}
-
-
-async def tts_node(state: dict) -> dict:
-    text = state.get("user_text", "") or state.get("partial_response", "")
-    voice_id = state.get("voice_id", "en-IN-NeerjaNeural")
-    if not text:
-        return {**state, "status": "tts_complete"}
-    try:
-        from app.services.tts import synthesize_speech
-        audio_bytes = await synthesize_speech(text, voice_id)
-        return {**state, "status": "tts_complete", "audio_bytes": audio_bytes}
-    except Exception as exc:
-        return {**state, "status": "tts_error", "error": str(exc)}
-
-
-async def post_turn_node(state: dict) -> dict:
-    return {**state, "status": "turn_complete"}
-
-
-async def interrupted_node(state: dict) -> dict:
-    return {**state, "status": "interrupted", "interrupted": True}

@@ -2,6 +2,7 @@ import { useEffect, useRef, useCallback, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { useVoiceCall } from '@/hooks/useVoiceCall';
+import { API_BASE } from '@/config';
 
 const STATUS_LABELS = {
   idle: 'Idle',
@@ -9,11 +10,6 @@ const STATUS_LABELS = {
   processing: 'Processing',
   speaking: 'Speaking',
 };
-
-const VOICES = [
-  { id: 'en-IN-NeerjaNeural', name: 'Neerja (Female)' },
-  { id: 'en-US-GuyNeural', name: 'Guy (Male)' },
-];
 
 function VisualizerCanvas({ analyser }) {
   const canvasRef = useRef(null);
@@ -86,7 +82,9 @@ export default function VoiceCallScreen() {
     selectedVoiceId,
     muted,
     error,
+    ragActive,
     latencies,
+    filler,
     startCall,
     stopCall,
     sendTextFallback,
@@ -98,6 +96,8 @@ export default function VoiceCallScreen() {
 
   const [textInput, setTextInput] = useState('');
   const [isStarting, setIsStarting] = useState(false);
+  const [voices, setVoices] = useState([]);
+  const [voicesLoading, setVoicesLoading] = useState(true);
   const analyserRef = useRef(null);
   const stopCallRef = useRef(null);
   stopCallRef.current = stopCall;
@@ -105,11 +105,36 @@ export default function VoiceCallScreen() {
   const initializedRef = useRef(false);
 
   useEffect(() => {
+    let cancelled = false;
+    const loadVoices = async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/voices`);
+        if (!cancelled && res.ok) {
+          const data = await res.json();
+          setVoices(data || []);
+        }
+      } catch {
+        if (!cancelled) {
+          setVoices([]);
+        }
+      } finally {
+        if (!cancelled) {
+          setVoicesLoading(false);
+        }
+      }
+    };
+    loadVoices();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
     if (!initializedRef.current && routeSessionId && status === 'idle') {
       initializedRef.current = true;
       const doInit = async () => {
         setIsStarting(true);
-        await startCall();
+        await startCall(routeSessionId);
         setIsStarting(false);
       };
       doInit();
@@ -156,6 +181,12 @@ export default function VoiceCallScreen() {
           <span className={`vc-status-badge ${statusClass}`}>
             {STATUS_LABELS[status] ?? status}
           </span>
+          {ragActive && (
+            <span className="vc-rag-badge" title="Retrieving document context">
+              <span className="vc-rag-badge-dot" />
+              RAG Active
+            </span>
+          )}
         </div>
         <div className="vc-header-right">
           <span className={`vc-connection-dot ${connectionStatus}`} />
@@ -203,11 +234,15 @@ export default function VoiceCallScreen() {
               className="vc-select"
               value={selectedVoiceId ?? ''}
               onChange={(e) => selectVoice(e.target.value)}
-              disabled={!isActive}
+              disabled={!isActive || voicesLoading}
             >
-              {VOICES.map((voice) => (
-                <option key={voice.id} value={voice.id}>{voice.name}</option>
-              ))}
+              {voicesLoading ? (
+                <option value="">Loading...</option>
+              ) : (
+                voices.map((voice) => (
+                  <option key={voice.id} value={voice.voice_id}>{voice.name}</option>
+                ))
+              )}
             </select>
           </div>
 
@@ -242,13 +277,22 @@ export default function VoiceCallScreen() {
         <div className="vc-transcript-section">
           <h3 className="vc-section-title">Transcript</h3>
           <div className="vc-transcript-scroll">
-            {transcript.length === 0 && (
+            {filler && (
+              <div className="vc-transcript-entry vc-transcript-entry--assistant vc-transcript-entry--filler">
+                <span className="vc-transcript-role">Assistant</span>
+                <p className="vc-transcript-text">{filler}</p>
+                <span className="vc-transcript-time">
+                  {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                </span>
+              </div>
+            )}
+            {transcript.length === 0 && !filler && (
               <p className="vc-transcript-empty">No messages yet. Start speaking or type below.</p>
             )}
             {transcript.map((entry) => (
               <div
                 key={entry.id}
-                className={`vc-transcript-entry ${entry.role === 'user' ? 'vc-transcript-entry--user' : 'vc-transcript-entry--assistant'}`}
+                className={`vc-transcript-entry ${entry.role === 'user' ? 'vc-transcript-entry--user' : 'vc-transcript-entry--assistant'} ${entry.isFiller ? 'vc-transcript-entry--filler' : ''}`}
               >
                 <span className="vc-transcript-role">
                   {entry.role === 'user' ? 'You' : 'Assistant'}

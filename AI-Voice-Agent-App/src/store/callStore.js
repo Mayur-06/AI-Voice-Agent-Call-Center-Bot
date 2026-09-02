@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { useSessionStore } from './session';
+import { WS_URL, API_BASE } from '@/config';
 
-const WS_URL = 'ws://localhost:8000/ws/voice';
 const AUDIO_CHUNK_INTERVAL_MS = 250;
 
 const callStore = create((set, get) => ({
@@ -14,6 +14,8 @@ const callStore = create((set, get) => ({
   muted: false,
   error: null,
   latencies: { stt: null, llm: null, ttsFirstAudio: null, total: null },
+  uploadedDocuments: [],
+  ragActive: false,
   ws: null,
   mediaStream: null,
   mediaRecorder: null,
@@ -21,6 +23,7 @@ const callStore = create((set, get) => ({
   chunkTimer: null,
   audioChunks: [],
   ttsSourceNode: null,
+  filler: null,
 
   setSessionId: (sessionId) => {
     set({ sessionId });
@@ -37,6 +40,8 @@ const callStore = create((set, get) => ({
   setMuted: (muted) => set({ muted }),
   setError: (error) => set({ error }),
   setLatencies: (latencies) => set((prev) => ({ latencies: { ...prev.latencies, ...latencies } })),
+  setUploadedDocuments: (uploadedDocuments) => set({ uploadedDocuments }),
+  setRagActive: (ragActive) => set({ ragActive }),
   setWs: (ws) => set({ ws }),
   setMediaStream: (mediaStream) => set({ mediaStream }),
   setMediaRecorder: (mediaRecorder) => set({ mediaRecorder }),
@@ -44,6 +49,7 @@ const callStore = create((set, get) => ({
   setChunkTimer: (chunkTimer) => set({ chunkTimer }),
   setAudioChunks: (audioChunks) => set({ audioChunks }),
   setTtsSourceNode: (ttsSourceNode) => set({ ttsSourceNode }),
+  setFiller: (filler) => set({ filler }),
 
   addTranscriptEntry: (entry) =>
     set((prev) => ({
@@ -61,6 +67,8 @@ const callStore = create((set, get) => ({
       muted: false,
       error: null,
       latencies: { stt: null, llm: null, ttsFirstAudio: null, total: null },
+      uploadedDocuments: [],
+      ragActive: false,
       ws: null,
       mediaStream: null,
       mediaRecorder: null,
@@ -68,10 +76,11 @@ const callStore = create((set, get) => ({
       chunkTimer: null,
       audioChunks: [],
       ttsSourceNode: null,
+      filler: null,
     });
     useSessionStore.getState().reset();
   },
 }));
 
-export { AUDIO_CHUNK_INTERVAL_MS, WS_URL };
+export { AUDIO_CHUNK_INTERVAL_MS, WS_URL, API_BASE };
 export default callStore;

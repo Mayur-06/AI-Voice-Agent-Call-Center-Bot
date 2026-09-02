@@ -7,21 +7,33 @@ from typing import AsyncIterable, Tuple
 
 from edge_tts import Communicate
 from app.config import settings
+from app.models.database import get_supabase
 from app.websocket.manager import manager, _append_log
 
 logger = logging.getLogger(__name__)
 
 
-async def synthesize_speech(text: str, voice_id: str, output_format: str = "mp3_44100_128") -> bytes:
-    communicate = Communicate(text=text, voice=voice_id, output_format=output_format)
+async def get_persona_voice_id(persona_id: str) -> str:
+    supabase = get_supabase()
+    try:
+        res = supabase.table("personas").select("voice_id").eq("id", persona_id).limit(1).execute()
+        if res.data:
+            return res.data[0]["voice_id"]
+    except Exception:
+        pass
+    return "en-IN-NeerjaNeural"
+
+
+async def synthesize_speech(text: str, voice_id: str) -> bytes:
+    communicate = Communicate(text=text, voice=voice_id)
     audio_buffer = io.BytesIO()
     async for chunk in _stream_audio_chunks(communicate):
         audio_buffer.write(chunk)
     return audio_buffer.getvalue()
 
 
-async def synthesize_speech_stream(text: str, voice_id: str, output_format: str = "mp3_44100_128"):
-    communicate = Communicate(text=text, voice=voice_id, output_format=output_format)
+async def synthesize_speech_stream(text: str, voice_id: str):
+    communicate = Communicate(text=text, voice=voice_id)
     async for chunk in _stream_audio_chunks(communicate):
         yield chunk
 
@@ -38,6 +50,9 @@ async def stream_sentences(
     async for sentence, idx in sentences:
         if first_sentence_queued_time is None:
             first_sentence_queued_time = time.perf_counter()
+
+        seg_start_ms = int((time.perf_counter() - first_sentence_queued_time) * 1000) if first_sentence_queued_time else 0
+        manager.start_ai_segment(session_id, seg_start_ms)
         await manager.send_json(session_id, {"type": "status", "message": "speaking", "sentence_index": idx})
         await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "info", "msg": f"WS TTS sentence session={session_id} index={idx} text={sentence}"})
         audio_buffer = bytearray()
@@ -48,6 +63,7 @@ async def stream_sentences(
                     first_audio_chunk_time = time.perf_counter()
                     first_chunk_received = True
                 audio_buffer.extend(audio_chunk)
+                manager.append_ai_audio(session_id, audio_chunk)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -55,6 +71,8 @@ async def stream_sentences(
             await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "error", "msg": f"WS TTS failed session={session_id} sentence={idx} error={exc}"})
         if audio_buffer:
             await manager.send_bytes(session_id, bytes(audio_buffer))
+        seg_end_ms = int((time.perf_counter() - first_sentence_queued_time) * 1000) if first_sentence_queued_time else seg_start_ms
+        manager.finish_ai_segment(session_id, seg_end_ms)
         await manager.send_json(session_id, {"type": "sentence_end", "text": sentence, "index": idx})
         await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "info", "msg": f"WS sentence sent session={session_id} index={idx} text={sentence}"})
         sentences_sent += 1

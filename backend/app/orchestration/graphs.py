@@ -9,7 +9,6 @@ from app.orchestration.state import (
     InsightsState,
     VoiceRouterState,
     DocumentPipelineState,
-    ConversationState,
 )
 from app.orchestration.nodes import (
     sentence_splitter_node,
@@ -24,15 +23,6 @@ from app.orchestration.nodes import (
     embed_node,
     index_node,
     validate_node,
-    preflight_node,
-    audio_vad_router_node,
-    stt_node,
-    transcript_validator_node,
-    retriever_node,
-    generate_response_node,
-    tts_node,
-    post_turn_node,
-    interrupted_node,
 )
 
 
@@ -112,38 +102,6 @@ def _build_document_pipeline_graph():
     return graph.compile()
 
 
-def _build_conversation_graph():
-    graph = StateGraph(ConversationState)
-    graph.add_node("preflight", preflight_node)
-    graph.add_node("audio_vad_router", audio_vad_router_node)
-    graph.add_node("stt", stt_node)
-    graph.add_node("transcript_validator", transcript_validator_node)
-    graph.add_node("rag_router", rag_router_node)
-    graph.add_node("retriever", retriever_node)
-    graph.add_node("generate_response", generate_response_node)
-    graph.add_node("tts", tts_node)
-    graph.add_node("post_turn", post_turn_node)
-    graph.add_node("interrupted", interrupted_node)
-
-    graph.add_edge(START, "preflight")
-    graph.add_edge("preflight", "audio_vad_router")
-    graph.add_edge("audio_vad_router", "stt")
-    graph.add_edge("stt", "transcript_validator")
-    graph.add_edge("transcript_validator", "rag_router")
-    graph.add_conditional_edges(
-        "rag_router",
-        lambda s: "retriever" if s.get("should_retrieve") else "generate_response",
-        {"retriever": "retriever", "generate_response": "generate_response"},
-    )
-    graph.add_edge("retriever", "generate_response")
-    graph.add_edge("generate_response", "tts")
-    graph.add_edge("tts", "post_turn")
-    graph.add_edge("post_turn", END)
-
-    graph.add_edge("interrupted", END)
-    return graph.compile()
-
-
 sentence_splitter_graph = _build_sentence_splitter_graph()
 sentiment_graph = _build_sentiment_graph()
 summarizer_graph = _build_summarizer_graph()
@@ -152,4 +110,3 @@ rag_router_graph = _build_rag_router_graph()
 insights_graph = _build_insights_graph()
 voice_router_graph = _build_voice_router_graph()
 document_pipeline_graph = _build_document_pipeline_graph()
-conversation_graph = _build_conversation_graph()
