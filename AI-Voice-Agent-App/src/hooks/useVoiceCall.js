@@ -1,5 +1,5 @@
 import { useEffect, useRef, useCallback } from 'react';
-import { WS_URL, AUDIO_CHUNK_INTERVAL_MS } from '@/store/callStore';
+import { WS_URL, AUDIO_CHUNK_INTERVAL_MS, API_BASE } from '@/store/callStore';
 import useCallStore from '@/store/callStore';
 
 const TARGET_SAMPLE_RATE = 16000;
@@ -30,16 +30,6 @@ function encodePcmChunk(int16Array) {
 }
 
 export function useVoiceCall() {
-  const wsRef = useRef(null);
-  const processorRef = useRef(null);
-  const chunkIntervalRef = useRef(null);
-  const ttsQueueRef = useRef([]);
-  const isPlayingTtsRef = useRef(false);
-  const ttsCtxRef = useRef(null);
-  const reconnectAttemptsRef = useRef(0);
-  const stopCallRef = useRef(null);
-  const connectingRef = useRef(false);
-
   const status = useCallStore((s) => s.status);
   const connectionStatus = useCallStore((s) => s.connectionStatus);
   const transcript = useCallStore((s) => s.transcript);
@@ -48,10 +38,11 @@ export function useVoiceCall() {
   const selectedVoiceId = useCallStore((s) => s.selectedVoiceId);
   const muted = useCallStore((s) => s.muted);
   const error = useCallStore((s) => s.error);
+  const ragActive = useCallStore((s) => s.ragActive);
   const latencies = useCallStore((s) => s.latencies);
   const mediaStream = useCallStore((s) => s.mediaStream);
-  const mediaRecorder = useCallStore((s) => s.mediaRecorder);
   const audioContext = useCallStore((s) => s.audioContext);
+  const filler = useCallStore((s) => s.filler);
 
   const setStatus = useCallStore((s) => s.setStatus);
   const setConnectionStatus = useCallStore((s) => s.setConnectionStatus);
@@ -63,29 +54,46 @@ export function useVoiceCall() {
   const setMuted = useCallStore((s) => s.setMuted);
   const setMediaStream = useCallStore((s) => s.setMediaStream);
   const setAudioContext = useCallStore((s) => s.setAudioContext);
-  const setMediaRecorder = useCallStore((s) => s.setMediaRecorder);
+  const setRagActive = useCallStore((s) => s.setRagActive);
+  const setFiller = useCallStore((s) => s.setFiller);
+  const setLatencies = useCallStore((s) => s.setLatencies);
   const addTranscriptEntry = useCallStore((s) => s.addTranscriptEntry);
 
+  const wsRef = useRef(null);
+  const processorRef = useRef(null);
+  const chunkIntervalRef = useRef(null);
+  const ttsQueueRef = useRef([]);
+  const isPlayingTtsRef = useRef(false);
+  const ttsCtxRef = useRef(null);
+  const currentTtsSourceRef = useRef(null);
+  const reconnectAttemptsRef = useRef(0);
+  const stopCallRef = useRef(null);
+  const connectingRef = useRef(false);
+  const mutedRef = useRef(muted);
+
+  useEffect(() => {
+    mutedRef.current = muted;
+  }, [muted]);
+
   const stopTtsPlayback = useCallback(() => {
-    if (processorRef.current) {
-      processorRef.current.disconnect();
-      processorRef.current = null;
-    }
-    if (mediaRecorder && mediaRecorder.state !== 'inactive') {
-      mediaRecorder.stop();
-    }
-    if (chunkIntervalRef.current) {
-      clearInterval(chunkIntervalRef.current);
-      chunkIntervalRef.current = null;
+    if (currentTtsSourceRef.current) {
+      try {
+        currentTtsSourceRef.current.onended = null;
+        currentTtsSourceRef.current.stop();
+      } catch {
+        // ignore stop errors on already-ended sources
+      }
+      currentTtsSourceRef.current = null;
     }
     ttsQueueRef.current = [];
     isPlayingTtsRef.current = false;
-  }, [mediaRecorder]);
+  }, []);
 
   const playNextTtsChunk = useCallback(() => {
     const ctx = ttsCtxRef.current || audioContext;
     if (!ctx || ttsQueueRef.current.length === 0) {
       isPlayingTtsRef.current = false;
+      currentTtsSourceRef.current = null;
       if (ttsQueueRef.current.length === 0) {
         setStatus('idle');
       }
@@ -99,7 +107,13 @@ export function useVoiceCall() {
     const source = ctx.createBufferSource();
     source.buffer = buffer;
     source.connect(ctx.destination);
-    source.onended = () => playNextTtsChunk();
+    currentTtsSourceRef.current = source;
+    source.onended = () => {
+      if (currentTtsSourceRef.current === source) {
+        currentTtsSourceRef.current = null;
+      }
+      playNextTtsChunk();
+    };
     source.start();
   }, [audioContext, setStatus]);
 
@@ -109,37 +123,58 @@ export function useVoiceCall() {
       case 'connected':
         setConnectionStatus('connected');
         setStatus('idle');
+        setRagActive(false);
+        setFiller(null);
         break;
       case 'authenticated':
         setConnectionStatus('authenticated');
         setStatus('idle');
+        setRagActive(false);
+        setFiller(null);
+        break;
+      case 'retrieving_context':
+        setRagActive(true);
+        setStatus('processing');
+        setFiller(null);
         break;
       case 'processing':
-      case 'retrieving_context':
       case 'thinking':
       case 'transcribing':
       case 'transcribed':
+        setRagActive(false);
         setStatus('processing');
+        setFiller(null);
         break;
       case 'speaking':
+        setRagActive(false);
         setStatus('speaking');
+        setFiller(null);
         break;
       case 'interrupted':
         stopTtsPlayback();
+        setRagActive(false);
         setStatus('idle');
+        setFiller(null);
         break;
       case 'response_ready':
       case 'playback_stopped':
         stopTtsPlayback();
+        setRagActive(false);
         setStatus('idle');
+        setFiller(null);
         break;
       default:
         if (message.startsWith('upload_received') || message.startsWith('decoded') || message.startsWith('vading')) {
-          setStatus('listening');
+          const currentStatus = useCallStore.getState().status;
+          if (currentStatus !== 'processing' && currentStatus !== 'speaking') {
+            setStatus('listening');
+          }
+          setRagActive(false);
+          setFiller(null);
         }
         break;
     }
-  }, [setConnectionStatus, setStatus, stopTtsPlayback]);
+  }, [setConnectionStatus, setStatus, setRagActive, stopTtsPlayback, setFiller]);
 
   const handleServerTranscript = useCallback((msg) => {
     const role = msg.role;
@@ -163,15 +198,37 @@ export function useVoiceCall() {
         playNextTtsChunk();
       }
     }, () => {
-      const rawData = new Float32Array(data);
-      const audioBuffer = ctx.createBuffer(1, rawData.length, 24000);
-      audioBuffer.getChannelData(0).set(rawData);
-      ttsQueueRef.current.push(audioBuffer);
-      if (!isPlayingTtsRef.current) {
+      const blob = new Blob([data], { type: 'audio/mpeg' });
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      audio.onended = () => {
+        URL.revokeObjectURL(url);
+        if (isPlayingTtsRef.current) {
+          isPlayingTtsRef.current = false;
+          currentTtsSourceRef.current = null;
+          setStatus('idle');
+        }
         playNextTtsChunk();
-      }
+      };
+      audio.onerror = () => {
+        URL.revokeObjectURL(url);
+        if (isPlayingTtsRef.current) {
+          isPlayingTtsRef.current = false;
+          currentTtsSourceRef.current = null;
+          setStatus('idle');
+        }
+        playNextTtsChunk();
+      };
+      isPlayingTtsRef.current = true;
+      setStatus('speaking');
+      audio.play().catch(() => {
+        URL.revokeObjectURL(url);
+        isPlayingTtsRef.current = false;
+        setStatus('idle');
+        playNextTtsChunk();
+      });
     });
-  }, [audioContext, playNextTtsChunk]);
+  }, [audioContext, playNextTtsChunk, setStatus]);
 
   const handleServerError = useCallback((msg) => {
     const errorMessage = msg.message;
@@ -190,6 +247,12 @@ export function useVoiceCall() {
     const text = msg.text;
     addTranscriptEntry({ role: 'assistant', text, isPartial: false });
   }, [addTranscriptEntry]);
+
+  const handleServerFiller = useCallback((msg) => {
+    const text = msg.text;
+    setFiller(text);
+    addTranscriptEntry({ role: 'assistant', text, isFiller: true });
+  }, [setFiller, addTranscriptEntry]);
 
   const handleServerMessage = useCallback((event) => {
     if (typeof event.data === 'string') {
@@ -217,10 +280,21 @@ export function useVoiceCall() {
           case 'sentence_end':
             handleServerSentenceEnd(msg);
             break;
+          case 'filler':
+            handleServerFiller(msg);
+            break;
           case 'error':
             handleServerError(msg);
             break;
           case 'pong':
+            break;
+          case 'latencies':
+            setLatencies({
+              stt: msg.stt ?? null,
+              llm: msg.llm ?? null,
+              ttsFirstAudio: msg.ttsFirstAudio ?? null,
+              total: msg.total ?? null,
+            });
             break;
           default:
             break;
@@ -235,7 +309,18 @@ export function useVoiceCall() {
     } else if (event.data instanceof ArrayBuffer) {
       handleServerResponseAudio(event.data);
     }
-  }, [handleServerStatus, handleServerTranscript, handleServerResponseAudio, handleServerError, handleServerSentiment, handleServerSentenceEnd, addTranscriptEntry, setStatus]);
+  }, [
+    handleServerStatus,
+    handleServerTranscript,
+    handleServerResponseAudio,
+    handleServerError,
+    handleServerSentiment,
+    handleServerSentenceEnd,
+    handleServerFiller,
+    addTranscriptEntry,
+    setStatus,
+    setLatencies,
+  ]);
 
   const connectWebSocket = useCallback((sessionId) => {
     return new Promise((resolve, reject) => {
@@ -312,11 +397,10 @@ export function useVoiceCall() {
       const source = audioContext.createMediaStreamSource(stream);
       processorRef.current = audioContext.createScriptProcessor(4096, 1, 1);
 
-      const ws = wsRef.current;
       const chunks = [];
 
       processorRef.current.onaudioprocess = (event) => {
-        if (muted) return;
+        if (mutedRef.current) return;
         const pcm = downMixAndResample(event.inputBuffer, TARGET_SAMPLE_RATE);
         chunks.push(pcm);
       };
@@ -325,7 +409,7 @@ export function useVoiceCall() {
       processorRef.current.connect(audioContext.destination);
 
       chunkIntervalRef.current = window.setInterval(() => {
-        if (chunks.length === 0 || muted) return;
+        if (chunks.length === 0 || mutedRef.current) return;
         const totalLength = chunks.reduce((sum, c) => sum + c.length, 0);
         const combined = new Int16Array(totalLength);
         let offset = 0;
@@ -335,8 +419,9 @@ export function useVoiceCall() {
         }
         chunks.length = 0;
 
-        if (ws && ws.readyState === WebSocket.OPEN) {
-          ws.send(encodePcmChunk(combined));
+        const currentWs = wsRef.current;
+        if (currentWs && currentWs.readyState === WebSocket.OPEN) {
+          currentWs.send(encodePcmChunk(combined));
         }
       }, AUDIO_CHUNK_INTERVAL_MS);
 
@@ -345,18 +430,57 @@ export function useVoiceCall() {
       setError(error instanceof Error ? error.message : 'Microphone access failed');
       return false;
     }
-  }, [muted, setMediaStream, setStatus, setAudioContext, setError]);
+  }, [setMediaStream, setStatus, setAudioContext, setError]);
 
-  const startCall = useCallback(async () => {
+  const startCall = useCallback(async (existingSessionId) => {
     if (connectingRef.current) return;
     connectingRef.current = true;
 
-    const newSessionId = crypto.randomUUID();
+    let newSessionId = existingSessionId;
+
+    if (!newSessionId) {
+      if (!selectedPersona) {
+        connectingRef.current = false;
+        setError('No persona selected');
+        setStatus('idle');
+        setConnectionStatus('disconnected');
+        return;
+      }
+
+      try {
+        const response = await fetch(`${API_BASE}/api/sessions`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            persona_id: selectedPersona,
+            selected_voice: selectedVoiceId || null,
+          }),
+        });
+
+        if (!response.ok) {
+          throw new Error('Failed to create session');
+        }
+
+        const data = await response.json();
+        newSessionId = data.id;
+      } catch (error) {
+        setError(error instanceof Error ? error.message : 'Failed to create session');
+        setStatus('idle');
+        setConnectionStatus('disconnected');
+        connectingRef.current = false;
+        return;
+      }
+    }
+
     setSessionId(newSessionId);
     setStatus('idle');
     setConnectionStatus('connecting');
     setTranscript([]);
     setError(null);
+    setFiller(null);
+    setLatencies({ stt: null, llm: null, ttsFirstAudio: null, total: null });
 
     try {
       await connectWebSocket(newSessionId);
@@ -368,7 +492,7 @@ export function useVoiceCall() {
     } finally {
       connectingRef.current = false;
     }
-  }, [setSessionId, setStatus, setConnectionStatus, setTranscript, setError, connectWebSocket, startMicCapture]);
+  }, [selectedPersona, selectedVoiceId, API_BASE, setSessionId, setStatus, setConnectionStatus, setTranscript, setError, setFiller, setLatencies, connectWebSocket, startMicCapture]);
 
   const stopCall = useCallback(() => {
     connectingRef.current = false;
@@ -448,12 +572,15 @@ export function useVoiceCall() {
     selectedVoiceId,
     muted,
     error,
+    ragActive,
     latencies,
+    filler,
     startCall,
     stopCall,
     sendTextFallback,
     toggleMute,
     setSelectedPersona,
+    setSelectedVoiceId,
     selectVoice,
     setStatus,
   };

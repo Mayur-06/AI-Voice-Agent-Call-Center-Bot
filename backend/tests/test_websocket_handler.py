@@ -5,7 +5,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import json as json_module
 import logging
 import pytest
-from unittest.mock import MagicMock, patch, AsyncMock
+from unittest.mock import MagicMock, patch, AsyncMock, ANY
 from fastapi import WebSocket, WebSocketDisconnect
 from httpx import Response
 from app.websocket.handler import router as ws_router
@@ -32,7 +32,13 @@ async def test_websocket_connect_and_disconnect():
     mock_ws.receive = AsyncMock(side_effect=WebSocketDisconnect())
     with patch("app.websocket.handler.manager") as mock_manager, \
          patch("app.websocket.handler.create_session", new_callable=AsyncMock) as mock_create_session, \
-         patch("app.websocket.handler.end_session", new_callable=AsyncMock) as mock_end_session:
+         patch("app.websocket.handler.end_session", new_callable=AsyncMock) as mock_end_session, \
+         patch("app.websocket.handler.get_persona_voice_id", new_callable=AsyncMock) as mock_get_voice, \
+         patch("app.websocket.handler._get_default_persona_id", new_callable=AsyncMock) as mock_get_default_persona, \
+         patch("app.websocket.handler._load_session", new_callable=AsyncMock) as mock_load_session:
+        mock_get_voice.return_value = "en-IN-NeerjaNeural"
+        mock_get_default_persona.return_value = "default"
+        mock_load_session.return_value = None
         mock_create_session.return_value = "session-1"
         mock_manager.connect = AsyncMock()
         mock_manager.disconnect = MagicMock()
@@ -42,6 +48,7 @@ async def test_websocket_connect_and_disconnect():
         mock_manager.disconnect.assert_called_once_with("session-1")
         mock_create_session.assert_called_once_with(
             persona_id="default",
+            user_id=ANY,
             session_id="session-1",
         )
 
@@ -55,7 +62,13 @@ async def test_websocket_voice_auth_message():
     ])
     with patch("app.websocket.handler.manager") as mock_manager, \
          patch("app.websocket.handler.create_session", new_callable=AsyncMock) as mock_create_session, \
-         patch("app.websocket.handler.end_session", new_callable=AsyncMock) as mock_end_session:
+         patch("app.websocket.handler.end_session", new_callable=AsyncMock) as mock_end_session, \
+         patch("app.websocket.handler.get_persona_voice_id", new_callable=AsyncMock) as mock_get_voice, \
+         patch("app.websocket.handler._get_default_persona_id", new_callable=AsyncMock) as mock_get_default_persona, \
+         patch("app.websocket.handler._load_session", new_callable=AsyncMock) as mock_load_session:
+        mock_get_voice.return_value = "en-IN-NeerjaNeural"
+        mock_get_default_persona.return_value = "default"
+        mock_load_session.return_value = None
         mock_create_session.return_value = "session-1"
         mock_manager.connect = AsyncMock()
         mock_manager.disconnect = MagicMock()
@@ -64,6 +77,7 @@ async def test_websocket_voice_auth_message():
         mock_manager.send_json.assert_called()
         mock_create_session.assert_called_once_with(
             persona_id="default",
+            user_id=ANY,
             session_id="session-1",
         )
 
@@ -77,7 +91,13 @@ async def test_websocket_voice_stop_playback():
     ])
     with patch("app.websocket.handler.manager") as mock_manager, \
          patch("app.websocket.handler.create_session", new_callable=AsyncMock) as mock_create_session, \
-         patch("app.websocket.handler.end_session", new_callable=AsyncMock) as mock_end_session:
+         patch("app.websocket.handler.end_session", new_callable=AsyncMock) as mock_end_session, \
+         patch("app.websocket.handler.get_persona_voice_id", new_callable=AsyncMock) as mock_get_voice, \
+         patch("app.websocket.handler._get_default_persona_id", new_callable=AsyncMock) as mock_get_default_persona, \
+         patch("app.websocket.handler._load_session", new_callable=AsyncMock) as mock_load_session:
+        mock_get_voice.return_value = "en-IN-NeerjaNeural"
+        mock_get_default_persona.return_value = "default"
+        mock_load_session.return_value = None
         mock_create_session.return_value = "session-1"
         mock_manager.connect = AsyncMock()
         mock_manager.disconnect = MagicMock()
@@ -86,6 +106,7 @@ async def test_websocket_voice_stop_playback():
         mock_manager.send_json.assert_called()
         mock_create_session.assert_called_once_with(
             persona_id="default",
+            user_id=ANY,
             session_id="session-1",
         )
 
@@ -99,7 +120,13 @@ async def test_websocket_voice_select():
     ])
     with patch("app.websocket.handler.manager") as mock_manager, \
          patch("app.websocket.handler.create_session", new_callable=AsyncMock) as mock_create_session, \
-         patch("app.websocket.handler.end_session", new_callable=AsyncMock) as mock_end_session:
+         patch("app.websocket.handler.end_session", new_callable=AsyncMock) as mock_end_session, \
+         patch("app.websocket.handler.get_persona_voice_id", new_callable=AsyncMock) as mock_get_voice, \
+         patch("app.websocket.handler._get_default_persona_id", new_callable=AsyncMock) as mock_get_default_persona, \
+         patch("app.websocket.handler._load_session", new_callable=AsyncMock) as mock_load_session:
+        mock_get_voice.return_value = "en-IN-NeerjaNeural"
+        mock_get_default_persona.return_value = "default"
+        mock_load_session.return_value = None
         mock_create_session.return_value = "session-1"
         mock_manager.connect = AsyncMock()
         mock_manager.disconnect = MagicMock()
@@ -109,6 +136,7 @@ async def test_websocket_voice_select():
         assert any("voice_selected" in str(c) for c in calls)
         mock_create_session.assert_called_once_with(
             persona_id="default",
+            user_id=ANY,
             session_id="session-1",
         )
 
@@ -121,14 +149,21 @@ async def test_websocket_transcript_message():
         WebSocketDisconnect(),
     ])
     with patch("app.websocket.handler.manager") as mock_manager, \
-         patch("app.services.voice_pipeline.manager") as mock_vp_manager, \
+         patch("app.services.voice_pipeline.manager", mock_manager), \
+         patch("app.services.tts.manager", mock_manager), \
          patch("app.websocket.handler.create_session", new_callable=AsyncMock) as mock_create_session, \
          patch("app.websocket.handler.end_session", new_callable=AsyncMock), \
          patch("app.services.voice_pipeline.analyze_sentiment", new_callable=AsyncMock) as mock_analyze_sentiment, \
-         patch("app.services.voice_pipeline.save_turn", new_callable=AsyncMock), \
-         patch("app.services.voice_pipeline.retrieve_context", new_callable=AsyncMock) as mock_retrieve, \
+          patch("app.services.voice_pipeline.save_turn", new_callable=AsyncMock), \
+          patch("app.services.voice_pipeline.retrieve_relevant_chunks", new_callable=AsyncMock) as mock_retrieve, \
          patch("app.services.voice_pipeline.generate_response_stream") as mock_generate_stream, \
-         patch("app.services.voice_pipeline.synthesize_speech_stream") as mock_tts_stream:
+         patch("app.services.tts.synthesize_speech_stream") as mock_tts_stream, \
+         patch("app.websocket.handler.get_persona_voice_id", new_callable=AsyncMock) as mock_get_voice, \
+         patch("app.websocket.handler._get_default_persona_id", new_callable=AsyncMock) as mock_get_default_persona, \
+         patch("app.websocket.handler._load_session", new_callable=AsyncMock) as mock_load_session:
+        mock_get_voice.return_value = "en-IN-NeerjaNeural"
+        mock_get_default_persona.return_value = "default"
+        mock_load_session.return_value = None
         mock_retrieve.return_value = []
         mock_analyze_sentiment.return_value = "neutral"
         mock_create_session.return_value = "session-1"
@@ -146,12 +181,11 @@ async def test_websocket_transcript_message():
         mock_manager.disconnect = MagicMock()
         mock_manager.send_json = AsyncMock()
         mock_manager.send_bytes = AsyncMock()
-        mock_vp_manager.send_json = AsyncMock()
-        mock_vp_manager.send_bytes = AsyncMock()
         await ws_router.routes[0].endpoint(mock_ws, "session-1")
-        mock_vp_manager.send_json.assert_called()
-        mock_vp_manager.send_bytes.assert_called()
+        mock_manager.send_json.assert_called()
+        mock_manager.send_bytes.assert_called()
         mock_create_session.assert_called_once_with(
             persona_id="default",
+            user_id=ANY,
             session_id="session-1",
         )

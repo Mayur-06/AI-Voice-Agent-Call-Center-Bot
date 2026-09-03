@@ -4,13 +4,42 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import pytest
 from unittest.mock import patch, MagicMock
-from app.services.llm import generate_response, generate_response_stream
+from app.services.llm import generate_response, generate_response_stream, get_persona_system_prompt
 
 
 def _make_mock_chunk(text: str):
     mock_chunk = MagicMock()
     mock_chunk.text = text
     return mock_chunk
+
+
+@pytest.mark.asyncio
+async def test_get_persona_system_prompt_found(mock_settings):
+    mock_supabase = MagicMock()
+    mock_supabase.table.return_value.select.return_value.eq.return_value.limit.return_value.execute.return_value.data = [
+        {"system_prompt": "You are a customer support agent."}
+    ]
+    with patch("app.services.llm.get_supabase", return_value=mock_supabase):
+        prompt = await get_persona_system_prompt("persona-1")
+    assert prompt == "You are a customer support agent."
+
+
+@pytest.mark.asyncio
+async def test_get_persona_system_prompt_missing(mock_settings):
+    mock_supabase = MagicMock()
+    mock_supabase.table.return_value.select.return_value.eq.return_value.limit.return_value.execute.return_value.data = []
+    with patch("app.services.llm.get_supabase", return_value=mock_supabase):
+        prompt = await get_persona_system_prompt("missing-persona")
+    assert prompt == "You are a helpful voice assistant."
+
+
+@pytest.mark.asyncio
+async def test_get_persona_system_prompt_exception(mock_settings):
+    mock_supabase = MagicMock()
+    mock_supabase.table.side_effect = RuntimeError("db error")
+    with patch("app.services.llm.get_supabase", return_value=mock_supabase):
+        prompt = await get_persona_system_prompt("persona-1")
+    assert prompt == "You are a helpful voice assistant."
 
 
 @pytest.mark.asyncio

@@ -4,7 +4,36 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import pytest
 from unittest.mock import patch, MagicMock, AsyncMock
-from app.services.tts import synthesize_speech, synthesize_speech_stream, stream_sentences
+from app.services.tts import synthesize_speech, synthesize_speech_stream, stream_sentences, get_persona_voice_id
+
+
+@pytest.mark.asyncio
+async def test_get_persona_voice_id_found(mock_settings):
+    mock_supabase = MagicMock()
+    mock_supabase.table.return_value.select.return_value.eq.return_value.limit.return_value.execute.return_value.data = [
+        {"voice_id": "en-IN-PrabhatNeural"}
+    ]
+    with patch("app.services.tts.get_supabase", return_value=mock_supabase):
+        voice_id = await get_persona_voice_id("persona-1")
+    assert voice_id == "en-IN-PrabhatNeural"
+
+
+@pytest.mark.asyncio
+async def test_get_persona_voice_id_missing(mock_settings):
+    mock_supabase = MagicMock()
+    mock_supabase.table.return_value.select.return_value.eq.return_value.limit.return_value.execute.return_value.data = []
+    with patch("app.services.tts.get_supabase", return_value=mock_supabase):
+        voice_id = await get_persona_voice_id("missing-persona")
+    assert voice_id == "en-IN-NeerjaNeural"
+
+
+@pytest.mark.asyncio
+async def test_get_persona_voice_id_exception(mock_settings):
+    mock_supabase = MagicMock()
+    mock_supabase.table.side_effect = RuntimeError("db error")
+    with patch("app.services.tts.get_supabase", return_value=mock_supabase):
+        voice_id = await get_persona_voice_id("persona-1")
+    assert voice_id == "en-IN-NeerjaNeural"
 
 
 @pytest.mark.asyncio
@@ -85,6 +114,7 @@ async def test_stream_sentences_handles_tts_error(mock_settings):
 
     async def mock_tts_stream(*args, **kwargs):
         raise RuntimeError("TTS failed")
+        yield b"audio"
 
     async def sentence_source():
         yield "Hello.", 0
@@ -95,4 +125,5 @@ async def test_stream_sentences_handles_tts_error(mock_settings):
         sentences_sent, tts_first_audio_latency_ms = await stream_sentences("session-1", sentence_source(), "en-US-GuyNeural")
 
     assert sentences_sent == 1
-    mock_manager.send_json.assert_any_call("session-1", {"type": "error", "message": "tts_failed:RuntimeError('TTS failed')"})
+    assert tts_first_audio_latency_ms is None
+    mock_manager.send_json.assert_any_call("session-1", {"type": "error", "message": "tts_failed:TTS failed"})

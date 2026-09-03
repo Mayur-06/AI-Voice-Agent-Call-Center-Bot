@@ -105,15 +105,70 @@ def get_duration_ms(audio_bytes: bytes) -> int:
     return int(duration * 1000)
 
 
-async def save_session_recording(session_id: str, audio_buffer: bytes):
-    os.makedirs("recordings", exist_ok=True)
-    file_path = f"recordings/{session_id}.wav"
+def _pcm_duration_ms(pcm_bytes: bytes, sample_rate: int = 16000, channels: int = 1, sample_width: int = 2) -> int:
+    frame_bytes = channels * sample_width
+    total_frames = len(pcm_bytes) // frame_bytes
+    return int((total_frames / sample_rate) * 1000)
 
+
+def compose_call_recording(user_pcm: bytes, ai_segments: list[dict], sample_rate: int = 16000) -> bytes:
+    if not user_pcm and not ai_segments:
+        return b""
+
+    if not user_pcm:
+        combined = bytearray()
+        for seg in sorted(ai_segments, key=lambda s: s.get("start_ms", 0)):
+            gap_samples = int(((seg.get("start_ms", 0) - (seg.get("prev_end_ms", 0))) / 1000.0) * sample_rate) * 2
+            combined.extend(b"\x00" * max(gap_samples, 0))
+            combined.extend(seg.get("pcm", b""))
+        return pcm_to_wav(bytes(combined), sample_rate=sample_rate)
+
+    user_duration_ms = _pcm_duration_ms(user_pcm, sample_rate=sample_rate)
+    user_samples = len(user_pcm) // 2
+    total_user_ms = user_duration_ms
+
+    timeline: list[tuple[int, bytes, str]] = []
+    timeline.append((0, user_pcm, "user"))
+
+    ai_offset_ms = 0
+    prev_end_ms = 0
+    for seg in sorted(ai_segments, key=lambda s: s.get("start_ms", 0)):
+        start_ms = seg.get("start_ms", prev_end_ms)
+        if start_ms < prev_end_ms:
+            start_ms = prev_end_ms
+        gap_ms = start_ms - prev_end_ms
+        if gap_ms > 0:
+            ai_offset_ms += gap_ms
+        timeline.append((ai_offset_ms, seg.get("pcm", b""), "ai"))
+        prev_end_ms = start_ms + seg.get("duration_ms", 0)
+
+    max_end_ms = max(total_user_ms, prev_end_ms) if ai_segments else total_user_ms
+    total_samples = int((max_end_ms / 1000.0) * sample_rate) * 2
+    if total_samples <= 0:
+        return pcm_to_wav(user_pcm, sample_rate=sample_rate)
+
+    mixed = bytearray(total_samples)
+    for offset_ms, pcm, speaker in timeline:
+        offset_samples = int((offset_ms / 1000.0) * sample_rate) * 2
+        if offset_samples < 0 or offset_samples >= len(mixed):
+            continue
+        for i in range(0, len(pcm), 2):
+            idx = offset_samples + i
+            if idx >= len(mixed):
+                break
+            sample = int.from_bytes(pcm[i:i+2], byteorder="little", signed=True)
+            mixed[idx] = sample & 0xFF
+            mixed[idx+1] = (sample >> 8) & 0xFF
+
+    return pcm_to_wav(bytes(mixed), sample_rate=sample_rate)
+
+
+async def save_session_recording(session_id: str, audio_buffer: bytes):
     try:
         wav_bytes = pcm_to_wav(audio_buffer)
     except Exception as exc:
         raise RuntimeError(f"Failed to encode session recording to WAV: {exc}") from exc
 
-    with open(file_path, "wb") as f:
-        f.write(wav_bytes)
-    return file_path
+    from app.services.storage import upload_recording
+    storage_path = await upload_recording(wav_bytes, session_id)
+    return storage_path

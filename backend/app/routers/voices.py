@@ -1,58 +1,59 @@
-from fastapi import APIRouter
-from app.orchestration.graphs import voice_router_graph
+from fastapi import APIRouter, HTTPException
+from fastapi.responses import Response
+from app.models.database import get_supabase
+from app.models.schemas import Voice
+from app.services.tts import synthesize_speech
+from typing import List
 
 router = APIRouter(prefix="/api/voices", tags=["voices"])
 
-_FALLBACK_VOICES = [
-    {"voice_id": "en-IN-NeerjaNeural", "name": "Neerja (Female, India)", "language": "en-IN", "gender": "female"},
-    {"voice_id": "en-IN-PrabhatNeural", "name": "Prabhat (Male, India)", "language": "en-IN", "gender": "male"},
-    {"voice_id": "en-US-JennyNeural", "name": "Jenny (Female, US)", "language": "en-US", "gender": "female"},
+_VOICES = [
+    {
+        "voice_id": "en-IN-NeerjaNeural",
+        "name": "Neerja (Female, India)",
+        "language": "en-IN",
+    },
+    {
+        "voice_id": "en-IN-PrabhatNeural",
+        "name": "Prabhat (Male, India)",
+        "language": "en-IN",
+    },
 ]
 
+_VOICE_PREVIEW_TEXTS = {
+    "en-IN-NeerjaNeural": "Hello! I am Neerja, your voice assistant.",
+    "en-IN-PrabhatNeural": "Hello! I am Prabhat, your voice assistant.",
+}
 
-async def list_voices():
-    return list(_FALLBACK_VOICES)
 
-
-@router.get("/")
-async def get_voices():
+async def _ensure_voices():
+    supabase = get_supabase()
     try:
-        voices = await list_voices()
+        res = supabase.table("voices").select("id").limit(1).execute()
+        if res.data:
+            return
     except Exception:
-        voices = list(_FALLBACK_VOICES)
-
-    transformed = []
-    for v in voices:
-        if "ShortName" in v:
-            transformed.append({
-                "voice_id": v.get("ShortName"),
-                "name": v.get("Name", v.get("ShortName", "")),
-                "language": v.get("Locale", ""),
-                "gender": v.get("Gender", "").lower(),
-                "preview_url": None,
-            })
-        else:
-            transformed.append({
-                "voice_id": v.get("id", v.get("voice_id")),
-                "name": v.get("name", v.get("Name", "")),
-                "language": v.get("language", v.get("Locale", "")),
-                "gender": v.get("gender", v.get("Gender", "")).lower(),
-                "preview_url": v.get("preview_url"),
-            })
-
+        return
     try:
-        route_state = await voice_router_graph.ainvoke({
-            "sentiment": "neutral",
-            "conversation": [],
-            "voice_id": transformed[0]["voice_id"] if transformed else _FALLBACK_VOICES[0]["voice_id"],
-            "persona_id": "default",
-        })
-        recommended = route_state.get("persona_id", "default")
-        for v in transformed:
-            if v["voice_id"] == _FALLBACK_VOICES[0]["voice_id"]:
-                v["recommended_for"] = recommended
-                break
+        supabase.table("voices").insert(_VOICES).execute()
     except Exception:
         pass
 
-    return transformed
+
+@router.get("/", response_model=List[Voice])
+async def get_voices():
+    await _ensure_voices()
+    supabase = get_supabase()
+    res = supabase.table("voices").select("*").order("id").execute()
+    return [Voice(**row) for row in (res.data or [])]
+
+
+@router.get("/{voice_id}/preview")
+async def preview_voice(voice_id: str):
+    voice = next((v for v in _VOICES if v["voice_id"] == voice_id or v["id"] == voice_id), None)
+    if not voice:
+        raise HTTPException(status_code=404, detail="Voice not found")
+
+    preview_text = _VOICE_PREVIEW_TEXTS.get(voice["voice_id"], "Hello! I am your voice assistant.")
+    audio_bytes = await synthesize_speech(preview_text, voice["voice_id"])
+    return Response(content=audio_bytes, media_type="audio/mpeg")

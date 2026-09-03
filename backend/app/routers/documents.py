@@ -1,11 +1,12 @@
-from fastapi import APIRouter, Depends, File, UploadFile, Query
+from fastapi import APIRouter, Depends, File, UploadFile, Query, HTTPException
 from app.models.database import get_supabase, get_storage_admin
-from app.services.rag import split_text, generate_embeddings
-from app.services.rag import index_document_chunks
+from app.services.rag import split_text, generate_embeddings, index_document
+from app.services.storage import upload_document, ensure_documents_bucket
 from app.config import settings
 from PyPDF2 import PdfReader
 import uuid
 from datetime import datetime, timezone
+from typing import List
 
 router = APIRouter(prefix="/api/documents", tags=["documents"])
 
@@ -13,60 +14,72 @@ router = APIRouter(prefix="/api/documents", tags=["documents"])
 @router.get("/")
 async def list_documents():
     supabase = get_supabase()
-    res = supabase.table("documents").select("*").order("created_at", desc=True).execute()
+    res = supabase.table("documents").select("*").order("uploaded_at", desc=True).execute()
     return res.data or []
 
 
 @router.post("/upload")
 async def upload_document(
-    file: UploadFile = File(...),
-    persona_id: str = Query("default"),
+    files: List[UploadFile] = File(...),
+    session_id: str = Query(None),
 ):
-    content_bytes = await file.read()
+    ensure_documents_bucket()
+    uploaded = []
 
-    if not content_bytes:
-        from fastapi import HTTPException
-        raise HTTPException(status_code=400, detail="Empty file")
+    for file in files:
+        content_bytes = await file.read()
 
-    if file.filename and file.filename.lower().endswith(".pdf"):
-        try:
-            import io
-            reader = PdfReader(io.BytesIO(content_bytes))
-            text = "\n".join(page.extract_text() or "" for page in reader.pages)
-        except Exception as exc:
-            from fastapi import HTTPException
-            raise HTTPException(status_code=400, detail=f"Failed to extract text from PDF: {exc}")
-    else:
-        try:
-            text = content_bytes.decode("utf-8")
-        except Exception as exc:
-            from fastapi import HTTPException
-            raise HTTPException(status_code=400, detail=f"Failed to decode file: {exc}")
+        if not content_bytes:
+            raise HTTPException(status_code=400, detail=f"Empty file: {file.filename}")
 
-    if not text.strip():
-        from fastapi import HTTPException
-        raise HTTPException(status_code=400, detail="Empty file")
+        file_type = file.content_type or "application/octet-stream"
+        filename = file.filename or "uploaded"
 
-    chunks = split_text(text)
-    embeddings = generate_embeddings(chunks)
-    doc_id = str(uuid.uuid4())
+        if filename.lower().endswith(".pdf"):
+            try:
+                import io
+                reader = PdfReader(io.BytesIO(content_bytes))
+                text = "\n".join(page.extract_text() or "" for page in reader.pages)
+            except Exception as exc:
+                raise HTTPException(status_code=400, detail=f"Failed to extract text from PDF {filename}: {exc}")
+        else:
+            try:
+                text = content_bytes.decode("utf-8")
+            except Exception as exc:
+                raise HTTPException(status_code=400, detail=f"Failed to decode file {filename}: {exc}")
 
-    supabase = get_supabase()
-    insert_res = supabase.table("documents").insert({
-        "id": doc_id,
-        "persona_id": persona_id,
-        "filename": file.filename or "uploaded",
-        "chunks_count": 0,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-    }).execute()
+        if not text.strip():
+            raise HTTPException(status_code=400, detail=f"Empty file: {filename}")
 
-    await index_document_chunks(doc_id, chunks)
+        chunks = split_text(text)
+        if not chunks:
+            raise HTTPException(status_code=400, detail=f"No text could be extracted from document {filename}")
 
-    inserted = insert_res.data[0] if isinstance(insert_res.data, list) and insert_res.data else {}
-    return {
-        "id": inserted.get("id", doc_id),
-        "persona_id": inserted.get("persona_id", persona_id),
-        "filename": inserted.get("filename", file.filename or "uploaded"),
-        "chunks_count": len(chunks),
-        "created_at": inserted.get("created_at", datetime.now(timezone.utc).isoformat()),
-    }
+        doc_id = str(uuid.uuid4())
+        storage_path = upload_document(content_bytes, filename, file_type)
+
+        supabase = get_supabase()
+        insert_res = supabase.table("documents").insert({
+            "id": doc_id,
+            "session_id": session_id,
+            "filename": filename,
+            "file_type": file_type,
+            "storage_path": storage_path,
+            "status": "uploaded",
+            "uploaded_at": datetime.now(timezone.utc).isoformat(),
+        }).execute()
+
+        await index_document(doc_id, chunks, session_id, filename=filename)
+
+        inserted = insert_res.data[0] if isinstance(insert_res.data, list) and insert_res.data else {}
+        uploaded.append({
+            "id": inserted.get("id", doc_id),
+            "filename": inserted.get("filename", filename),
+            "file_type": inserted.get("file_type", file_type),
+            "storage_path": inserted.get("storage_path", storage_path),
+            "chunks_count": len(chunks),
+            "status": "indexed",
+            "uploaded_at": inserted.get("uploaded_at", datetime.now(timezone.utc).isoformat()),
+        })
+
+    return {"documents": uploaded}
