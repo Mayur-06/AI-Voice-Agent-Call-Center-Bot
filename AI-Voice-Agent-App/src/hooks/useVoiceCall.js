@@ -4,6 +4,33 @@ import useCallStore from '@/store/callStore';
 
 const TARGET_SAMPLE_RATE = 16000;
 
+function encodeWav(samples, sampleRate) {
+  const buffer = new ArrayBuffer(44 + samples.length * 2);
+  const view = new DataView(buffer);
+  const writeString = (offset, string) => {
+    for (let i = 0; i < string.length; i++) {
+      view.setUint8(offset + i, string.charCodeAt(i));
+    }
+  };
+  writeString(0, 'RIFF');
+  view.setUint32(4, 36 + samples.length * 2, true);
+  writeString(8, 'WAVE');
+  writeString(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeString(36, 'data');
+  view.setUint32(40, samples.length * 2, true);
+  for (let i = 0; i < samples.length; i++) {
+    view.setInt16(44 + i * 2, samples[i], true);
+  }
+  return new Blob([buffer], { type: 'audio/wav' });
+}
+
 function downMixAndResample(inputBuffer, outputSampleRate) {
   const inputSampleRate = inputBuffer.sampleRate;
   const inputData = inputBuffer.getChannelData(0);
@@ -58,6 +85,9 @@ export function useVoiceCall() {
   const setFiller = useCallStore((s) => s.setFiller);
   const setLatencies = useCallStore((s) => s.setLatencies);
   const addTranscriptEntry = useCallStore((s) => s.addTranscriptEntry);
+  const updateLastTranscriptEntry = useCallStore((s) => s.updateLastTranscriptEntry);
+  const addLocalRecording = useCallStore((s) => s.addLocalRecording);
+  const clearLocalRecordings = useCallStore((s) => s.clearLocalRecordings);
 
   const wsRef = useRef(null);
   const processorRef = useRef(null);
@@ -69,27 +99,18 @@ export function useVoiceCall() {
   const reconnectAttemptsRef = useRef(0);
   const stopCallRef = useRef(null);
   const connectingRef = useRef(false);
+  const capturingRef = useRef(false);
   const mutedRef = useRef(muted);
+  const analyserRef = useRef(null);
+  const connectWebSocketRef = useRef(null);
+  const playNextTtsChunkRef = useRef(null);
+  const currentTurnPcmChunksRef = useRef([]);
 
   useEffect(() => {
     mutedRef.current = muted;
   }, [muted]);
 
-  const stopTtsPlayback = useCallback(() => {
-    if (currentTtsSourceRef.current) {
-      try {
-        currentTtsSourceRef.current.onended = null;
-        currentTtsSourceRef.current.stop();
-      } catch {
-        // ignore stop errors on already-ended sources
-      }
-      currentTtsSourceRef.current = null;
-    }
-    ttsQueueRef.current = [];
-    isPlayingTtsRef.current = false;
-  }, []);
-
-  const playNextTtsChunk = useCallback(() => {
+  function playNextTtsChunk() {
     const ctx = ttsCtxRef.current || audioContext;
     if (!ctx || ttsQueueRef.current.length === 0) {
       isPlayingTtsRef.current = false;
@@ -115,7 +136,25 @@ export function useVoiceCall() {
       playNextTtsChunk();
     };
     source.start();
-  }, [audioContext, setStatus]);
+  }
+
+  useEffect(() => {
+    playNextTtsChunkRef.current = playNextTtsChunk;
+  });
+
+  const stopTtsPlayback = useCallback(() => {
+    if (currentTtsSourceRef.current) {
+      try {
+        currentTtsSourceRef.current.onended = null;
+        currentTtsSourceRef.current.stop();
+      } catch {
+        // ignore stop errors on already-ended sources
+      }
+      currentTtsSourceRef.current = null;
+    }
+    ttsQueueRef.current = [];
+    isPlayingTtsRef.current = false;
+  }, []);
 
   const handleServerStatus = useCallback((msg) => {
     const message = msg.message;
@@ -128,6 +167,11 @@ export function useVoiceCall() {
         break;
       case 'authenticated':
         setConnectionStatus('authenticated');
+        setStatus('idle');
+        setRagActive(false);
+        setFiller(null);
+        break;
+      case 'idle':
         setStatus('idle');
         setRagActive(false);
         setFiller(null);
@@ -164,7 +208,7 @@ export function useVoiceCall() {
         setFiller(null);
         break;
       default:
-        if (message.startsWith('upload_received') || message.startsWith('decoded') || message.startsWith('vading')) {
+        if ((message.startsWith('upload_received') || message.startsWith('decoded') || message.startsWith('vading')) && capturingRef.current) {
           const currentStatus = useCallStore.getState().status;
           if (currentStatus !== 'processing' && currentStatus !== 'speaking') {
             setStatus('listening');
@@ -180,22 +224,61 @@ export function useVoiceCall() {
     const role = msg.role;
     const text = msg.text;
     if (role === 'user') {
-      addTranscriptEntry({ role: 'user', text });
+      if (currentTurnPcmChunksRef.current && currentTurnPcmChunksRef.current.length > 0) {
+        const totalLength = currentTurnPcmChunksRef.current.reduce((sum, c) => sum + c.length, 0);
+        const allSamples = new Int16Array(totalLength);
+        let offset = 0;
+        for (const chunk of currentTurnPcmChunksRef.current) {
+          allSamples.set(chunk, offset);
+          offset += chunk.length;
+        }
+        const wavBlob = encodeWav(allSamples, TARGET_SAMPLE_RATE);
+        const url = URL.createObjectURL(wavBlob);
+        const durationMs = Math.floor((allSamples.length / TARGET_SAMPLE_RATE) * 1000);
+        addLocalRecording({
+          id: crypto.randomUUID(),
+          timestamp: new Date().toISOString(),
+          transcript: text,
+          wavUrl: url,
+          wavBlob,
+          durationMs,
+        });
+        currentTurnPcmChunksRef.current = [];
+      }
+      updateLastTranscriptEntry({ role: 'user', text, isPartial: false });
       setStatus('processing');
     } else if (role === 'assistant') {
-      addTranscriptEntry({ role: 'assistant', text });
+      const currentTranscript = useCallStore.getState().transcript;
+      const last = currentTranscript[currentTranscript.length - 1];
+      if (!last || last.role !== 'assistant' || last.text !== text) {
+        addTranscriptEntry({ role: 'assistant', text });
+      }
       setStatus('idle');
     }
-  }, [addTranscriptEntry, setStatus]);
+  }, [addTranscriptEntry, setStatus, updateLastTranscriptEntry, addLocalRecording]);
+
+  const handleServerPartialTranscript = useCallback((msg) => {
+    updateLastTranscriptEntry({ role: 'user', text: msg.text, isPartial: true });
+  }, [updateLastTranscriptEntry]);
 
   const handleServerResponseAudio = useCallback((data) => {
-    const ctx = audioContext;
-    if (!ctx) return;
+    const ctx = audioContext || ttsCtxRef.current;
+    if (!ctx) {
+      try {
+        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+        const newCtx = new AudioContextClass();
+        setAudioContext(newCtx);
+        ttsCtxRef.current = newCtx;
+      } catch {
+        return;
+      }
+    }
 
-    ctx.decodeAudioData(data.slice(0), (buffer) => {
+    const targetCtx = audioContext || ttsCtxRef.current;
+    targetCtx.decodeAudioData(data.slice(0), (buffer) => {
       ttsQueueRef.current.push(buffer);
       if (!isPlayingTtsRef.current) {
-        playNextTtsChunk();
+        playNextTtsChunkRef.current();
       }
     }, () => {
       const blob = new Blob([data], { type: 'audio/mpeg' });
@@ -208,7 +291,7 @@ export function useVoiceCall() {
           currentTtsSourceRef.current = null;
           setStatus('idle');
         }
-        playNextTtsChunk();
+        playNextTtsChunkRef.current();
       };
       audio.onerror = () => {
         URL.revokeObjectURL(url);
@@ -217,7 +300,7 @@ export function useVoiceCall() {
           currentTtsSourceRef.current = null;
           setStatus('idle');
         }
-        playNextTtsChunk();
+        playNextTtsChunkRef.current();
       };
       isPlayingTtsRef.current = true;
       setStatus('speaking');
@@ -225,10 +308,10 @@ export function useVoiceCall() {
         URL.revokeObjectURL(url);
         isPlayingTtsRef.current = false;
         setStatus('idle');
-        playNextTtsChunk();
+        playNextTtsChunkRef.current();
       });
     });
-  }, [audioContext, playNextTtsChunk, setStatus]);
+  }, [audioContext, setStatus, setAudioContext]);
 
   const handleServerError = useCallback((msg) => {
     const errorMessage = msg.message;
@@ -264,6 +347,20 @@ export function useVoiceCall() {
             break;
           case 'transcript':
             handleServerTranscript(msg);
+            break;
+          case 'response_ready':
+            if (!msg.role || msg.role === 'assistant') {
+              const currentTranscript = useCallStore.getState().transcript;
+              const last = currentTranscript[currentTranscript.length - 1];
+              const text = msg.text;
+              if (!last || last.role !== 'assistant' || last.text !== text) {
+                addTranscriptEntry({ role: 'assistant', text });
+              }
+            }
+            setStatus('idle');
+            break;
+          case 'partial_transcript':
+            handleServerPartialTranscript(msg);
             break;
           case 'response_text':
             addTranscriptEntry({ role: 'assistant', text: msg.text });
@@ -312,12 +409,14 @@ export function useVoiceCall() {
   }, [
     handleServerStatus,
     handleServerTranscript,
+    handleServerPartialTranscript,
     handleServerResponseAudio,
     handleServerError,
     handleServerSentiment,
     handleServerSentenceEnd,
     handleServerFiller,
     addTranscriptEntry,
+    updateLastTranscriptEntry,
     setStatus,
     setLatencies,
   ]);
@@ -325,6 +424,11 @@ export function useVoiceCall() {
   const connectWebSocket = useCallback((sessionId) => {
     return new Promise((resolve, reject) => {
       try {
+        const oldWs = wsRef.current;
+        if (oldWs && (oldWs.readyState === WebSocket.OPEN || oldWs.readyState === WebSocket.CONNECTING)) {
+          try { oldWs.close(); } catch {}
+        }
+
         const ws = new WebSocket(`${WS_URL}/${sessionId}`);
         ws.binaryType = 'arraybuffer';
         wsRef.current = ws;
@@ -363,7 +467,7 @@ export function useVoiceCall() {
             reconnectAttemptsRef.current += 1;
             setTimeout(() => {
               if (sessionId) {
-                connectWebSocket(sessionId);
+                connectWebSocketRef.current(sessionId);
               }
             }, delay);
           }
@@ -375,6 +479,7 @@ export function useVoiceCall() {
   }, [selectedPersona, selectedVoiceId, setConnectionStatus, stopTtsPlayback, setStatus, handleServerMessage]);
 
   const startMicCapture = useCallback(async () => {
+    if (capturingRef.current) return false;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
@@ -388,6 +493,7 @@ export function useVoiceCall() {
 
       setMediaStream(stream);
       setStatus('listening');
+      capturingRef.current = true;
 
       const AudioContextClass = window.AudioContext || window.webkitAudioContext;
       const audioContext = new AudioContextClass({ sampleRate: TARGET_SAMPLE_RATE });
@@ -397,6 +503,10 @@ export function useVoiceCall() {
       const source = audioContext.createMediaStreamSource(stream);
       processorRef.current = audioContext.createScriptProcessor(4096, 1, 1);
 
+      const analyser = audioContext.createAnalyser();
+      analyser.fftSize = 2048;
+      analyserRef.current = analyser;
+
       const chunks = [];
 
       processorRef.current.onaudioprocess = (event) => {
@@ -405,11 +515,12 @@ export function useVoiceCall() {
         chunks.push(pcm);
       };
 
-      source.connect(processorRef.current);
+      source.connect(analyser);
+      analyser.connect(processorRef.current);
       processorRef.current.connect(audioContext.destination);
 
       chunkIntervalRef.current = window.setInterval(() => {
-        if (chunks.length === 0 || mutedRef.current) return;
+        if (chunks.length === 0 || mutedRef.current || !capturingRef.current) return;
         const totalLength = chunks.reduce((sum, c) => sum + c.length, 0);
         const combined = new Int16Array(totalLength);
         let offset = 0;
@@ -419,6 +530,10 @@ export function useVoiceCall() {
         }
         chunks.length = 0;
 
+        if (currentTurnPcmChunksRef.current) {
+          currentTurnPcmChunksRef.current.push(combined.slice());
+        }
+
         const currentWs = wsRef.current;
         if (currentWs && currentWs.readyState === WebSocket.OPEN) {
           currentWs.send(encodePcmChunk(combined));
@@ -427,6 +542,7 @@ export function useVoiceCall() {
 
       return true;
     } catch (error) {
+      capturingRef.current = false;
       setError(error instanceof Error ? error.message : 'Microphone access failed');
       return false;
     }
@@ -477,14 +593,17 @@ export function useVoiceCall() {
     setSessionId(newSessionId);
     setStatus('idle');
     setConnectionStatus('connecting');
-    setTranscript([]);
+    if (!existingSessionId) {
+        setTranscript([]);
+        clearLocalRecordings();
+    }
     setError(null);
     setFiller(null);
     setLatencies({ stt: null, llm: null, ttsFirstAudio: null, total: null });
+    currentTurnPcmChunksRef.current = [];
 
     try {
-      await connectWebSocket(newSessionId);
-      await startMicCapture();
+      await connectWebSocketRef.current(newSessionId);
     } catch (error) {
       setError(error instanceof Error ? error.message : 'Failed to start call');
       setStatus('idle');
@@ -492,14 +611,14 @@ export function useVoiceCall() {
     } finally {
       connectingRef.current = false;
     }
-  }, [selectedPersona, selectedVoiceId, API_BASE, setSessionId, setStatus, setConnectionStatus, setTranscript, setError, setFiller, setLatencies, connectWebSocket, startMicCapture]);
+  }, [selectedPersona, selectedVoiceId, setSessionId, setStatus, setConnectionStatus, setTranscript, setError, setFiller, setLatencies]);
 
   const stopCall = useCallback(() => {
     connectingRef.current = false;
     const ws = wsRef.current;
     if (ws && ws.readyState === WebSocket.OPEN) {
       try {
-        ws.send(JSON.stringify({ type: 'stop_call', session_id }));
+        ws.send(JSON.stringify({ type: 'stop_call', session_id: sessionId }));
       } catch {
         // ignore send errors on close
       }
@@ -518,6 +637,11 @@ export function useVoiceCall() {
       processorRef.current = null;
     }
 
+    if (analyserRef.current) {
+      try { analyserRef.current.disconnect(); } catch {}
+      analyserRef.current = null;
+    }
+
     if (mediaStream) {
       mediaStream.getTracks().forEach((track) => track.stop());
     }
@@ -529,19 +653,78 @@ export function useVoiceCall() {
       ttsCtxRef.current.close().catch(function() {});
     }
 
+    const recordings = useCallStore.getState().localRecordings || [];
+    for (const rec of recordings) {
+      if (rec?.wavUrl) {
+        URL.revokeObjectURL(rec.wavUrl);
+      }
+    }
+    currentTurnPcmChunksRef.current = [];
+
+    capturingRef.current = false;
+
     setStatus('idle');
     setConnectionStatus('disconnected');
     setMediaStream(null);
     setAudioContext(null);
   }, [sessionId, mediaStream, audioContext, stopTtsPlayback, setStatus, setConnectionStatus, setMediaStream, setAudioContext]);
 
-  const sendTextFallback = useCallback((text) => {
+  const stopCapture = useCallback(() => {
     const ws = wsRef.current;
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    ws.send(JSON.stringify({ type: 'transcript', text, session_id }));
-    addTranscriptEntry({ role: 'user', text });
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      try {
+        ws.send(JSON.stringify({ type: 'stop_listening', session_id: sessionId }));
+      } catch (e) {
+        console.error('Failed to send stop_listening:', e);
+      }
+    }
+
+    capturingRef.current = false;
     setStatus('processing');
-  }, [sessionId, addTranscriptEntry, setStatus]);
+    stopTtsPlayback();
+
+    if (chunkIntervalRef.current) {
+      clearInterval(chunkIntervalRef.current);
+      chunkIntervalRef.current = null;
+    }
+
+    if (processorRef.current) {
+      processorRef.current.disconnect();
+      processorRef.current = null;
+    }
+
+    if (analyserRef.current) {
+      try { analyserRef.current.disconnect(); } catch {}
+      analyserRef.current = null;
+    }
+
+    if (mediaStream) {
+      mediaStream.getTracks().forEach((track) => track.stop());
+      setMediaStream(null);
+    }
+  }, [sessionId, mediaStream, setMediaStream, stopTtsPlayback, setStatus]);
+
+  const toggleCapture = useCallback(async () => {
+    if (capturingRef.current) {
+      stopCapture();
+      return;
+    }
+    const ok = await startMicCapture();
+    if (!ok) {
+      setError('Microphone access failed');
+    }
+  }, [stopCapture, startMicCapture, setError]);
+
+  const sendTextFallback = useCallback((text) => {
+    const trimmed = (text || '').trim();
+    if (!trimmed) return;
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      setError('WebSocket is not connected');
+      return;
+    }
+    ws.send(JSON.stringify({ type: 'transcript', text: trimmed, session_id: sessionId }));
+  }, [sessionId, setError]);
 
   const toggleMute = useCallback(() => {
     setMuted(!muted);
@@ -555,11 +738,19 @@ export function useVoiceCall() {
     }
   }, [setSelectedVoiceId]);
 
-  stopCallRef.current = stopCall;
+  useEffect(() => {
+    connectWebSocketRef.current = connectWebSocket;
+  }, [connectWebSocket]);
+
+  useEffect(() => {
+    stopCallRef.current = stopCall;
+  }, [stopCall]);
 
   useEffect(() => {
     return () => {
-      stopCallRef.current();
+      if (stopCallRef.current) {
+        stopCallRef.current();
+      }
     };
   }, []);
 
@@ -575,13 +766,19 @@ export function useVoiceCall() {
     ragActive,
     latencies,
     filler,
+    isCapturing: !!mediaStream,
+    localRecordings: useCallStore((s) => s.localRecordings),
     startCall,
     stopCall,
+    stopCapture,
+    toggleCapture,
     sendTextFallback,
     toggleMute,
     setSelectedPersona,
     setSelectedVoiceId,
     selectVoice,
     setStatus,
+    setError,
+    analyser: analyserRef.current,
   };
 }

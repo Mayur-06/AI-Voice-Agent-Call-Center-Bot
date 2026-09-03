@@ -78,30 +78,27 @@ export default function VoiceCallScreen() {
     connectionStatus,
     transcript,
     sessionId,
-    selectedPersona,
     selectedVoiceId,
     muted,
     error,
     ragActive,
     latencies,
     filler,
+    isCapturing,
+    localRecordings = [],
     startCall,
     stopCall,
+    toggleCapture,
     sendTextFallback,
-    toggleMute,
-    setSelectedPersona,
     selectVoice,
     setStatus,
+    setError,
+    analyser,
   } = useVoiceCall();
 
   const [textInput, setTextInput] = useState('');
-  const [isStarting, setIsStarting] = useState(false);
   const [voices, setVoices] = useState([]);
   const [voicesLoading, setVoicesLoading] = useState(true);
-  const analyserRef = useRef(null);
-  const stopCallRef = useRef(null);
-  stopCallRef.current = stopCall;
-
   const initializedRef = useRef(false);
 
   useEffect(() => {
@@ -133,19 +130,11 @@ export default function VoiceCallScreen() {
     if (!initializedRef.current && routeSessionId && status === 'idle') {
       initializedRef.current = true;
       const doInit = async () => {
-        setIsStarting(true);
         await startCall(routeSessionId);
-        setIsStarting(false);
       };
       doInit();
     }
   }, [routeSessionId, startCall, status]);
-
-  useEffect(() => {
-    return () => {
-      stopCallRef.current();
-    };
-  }, []);
 
   const handleEndCall = useCallback(() => {
     stopCall();
@@ -171,7 +160,11 @@ export default function VoiceCallScreen() {
     : status === 'speaking' ? 'status-speaking'
     : '';
 
-  const isActive = connectionStatus === 'connected' || connectionStatus === 'authenticated' || status === 'listening' || status === 'processing' || status === 'speaking';
+  const isActive = connectionStatus === 'connected' || connectionStatus === 'authenticated' || isCapturing || status === 'processing' || status === 'speaking';
+
+  const canSendText = Boolean(sessionId) && (connectionStatus === 'connected' || connectionStatus === 'authenticated');
+
+  const isAiSpeaking = status === 'speaking';
 
   return (
     <div className="voice-call-screen">
@@ -185,6 +178,12 @@ export default function VoiceCallScreen() {
             <span className="vc-rag-badge" title="Retrieving document context">
               <span className="vc-rag-badge-dot" />
               RAG Active
+            </span>
+          )}
+          {isAiSpeaking && (
+            <span className="vc-ai-speaking-badge" title="AI is speaking">
+              <span className="vc-ai-speaking-dot" />
+              AI Speaking
             </span>
           )}
         </div>
@@ -204,13 +203,13 @@ export default function VoiceCallScreen() {
         <div className="vc-error-banner">
           <span className="vc-error-icon">!</span>
           <span className="vc-error-text">{error}</span>
-          <button className="vc-error-dismiss" onClick={() => setStatus('idle')}>x</button>
+          <button className="vc-error-dismiss" onClick={() => setError(null)}>x</button>
         </div>
       )}
 
       <div className="vc-body">
         <div className="vc-visualizer-section">
-          <VisualizerCanvas analyser={analyserRef.current} />
+          <VisualizerCanvas analyser={analyser} />
           <div className="vc-latency-row">
             {latencies.stt !== null && (
               <span className="vc-latency-badge">STT: {latencies.stt}ms</span>
@@ -230,29 +229,23 @@ export default function VoiceCallScreen() {
         <div className="vc-controls-section">
           <div className="vc-voice-selector">
             <label className="vc-label">Voice</label>
-            <select
-              className="vc-select"
-              value={selectedVoiceId ?? ''}
-              onChange={(e) => selectVoice(e.target.value)}
-              disabled={!isActive || voicesLoading}
-            >
-              {voicesLoading ? (
-                <option value="">Loading...</option>
-              ) : (
-                voices.map((voice) => (
-                  <option key={voice.id} value={voice.voice_id}>{voice.name}</option>
-                ))
-              )}
-            </select>
+            <span className="vc-voice-readonly">
+              {voicesLoading
+                ? 'Loading...'
+                : (() => {
+                    const voice = voices.find((v) => v.voice_id === selectedVoiceId);
+                    return voice ? voice.name : selectedVoiceId || 'Default';
+                  })()}
+            </span>
           </div>
 
           <div className="vc-mic-row">
             <button
-              className={`vc-mic-button ${status === 'listening' && !muted ? 'vc-mic-button--active' : ''} ${muted ? 'vc-mic-button--muted' : ''}`}
-              onClick={toggleMute}
+              className={`vc-mic-button ${isCapturing ? 'vc-mic-button--active' : ''} ${muted ? 'vc-mic-button--muted' : ''}`}
+              onClick={toggleCapture}
               disabled={!isActive}
-              aria-label={muted ? 'Unmute microphone' : 'Mute microphone'}
-              title={muted ? 'Unmute' : 'Mute'}
+              aria-label={isCapturing ? 'Stop listening' : 'Start listening'}
+              title={isCapturing ? 'Stop listening' : 'Start listening'}
             >
               <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M12 2a3 3 0 0 1 3 3v7a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3Z" />
@@ -318,12 +311,12 @@ export default function VoiceCallScreen() {
               value={textInput}
               onChange={(e) => setTextInput(e.target.value)}
               onKeyDown={handleKeyDown}
-              disabled={!isActive}
+              disabled={!canSendText}
             />
             <Button
               size="sm"
               onClick={handleSendText}
-              disabled={!isActive || !textInput.trim()}
+              disabled={!canSendText || !textInput.trim()}
               aria-label="Send text message"
             >
               Send
@@ -331,6 +324,35 @@ export default function VoiceCallScreen() {
           </div>
           <p className="vc-fallback-hint">Use text input if your microphone is unavailable.</p>
         </div>
+
+        {Array.isArray(localRecordings) && localRecordings.length > 0 && (
+          <div className="vc-recordings-section">
+            <h3 className="vc-section-title">Local Recordings</h3>
+            <div className="vc-recordings-list">
+              {localRecordings.map((rec) => (
+                <div key={rec.id} className="vc-recording-entry">
+                  <div className="vc-recording-meta">
+                    <span className="vc-recording-time">
+                      {new Date(rec.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                    </span>
+                    <span className="vc-recording-duration">{Math.round(rec.durationMs / 1000)}s</span>
+                  </div>
+                  <p className="vc-recording-text">{rec.transcript}</p>
+                  <div className="vc-recording-actions">
+                    <audio controls src={rec.wavUrl} className="vc-recording-audio" />
+                    <a
+                      href={rec.wavUrl}
+                      download={`recording-${new Date(rec.timestamp).getTime()}.wav`}
+                      className="vc-recording-download"
+                    >
+                      Download .wav
+                    </a>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

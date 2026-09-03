@@ -499,10 +499,10 @@
 }
 
 .vc-transcript-section {
-  flex: 1;
+  flex: 1 1 0;
   display: flex;
   flex-direction: column;
-  min-height: 0;
+  min-height: 12rem;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg, 0.5rem);
   background: var(--card);
@@ -622,6 +622,88 @@
   margin: 0.375rem 0 0;
   font-size: 0.6875rem;
   color: var(--muted-foreground);
+}
+
+.vc-recordings-section {
+  flex-shrink: 0;
+  border-top: 1px solid var(--border);
+  padding-top: 0.875rem;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  max-height: 32vh;
+}
+
+.vc-recordings-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+  margin-top: 0.5rem;
+  max-height: 28vh;
+  overflow-y: auto;
+}
+
+.vc-recording-entry {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg, 0.5rem);
+  background: var(--card);
+  padding: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.vc-recording-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.vc-recording-time {
+  font-size: 0.75rem;
+  color: var(--muted-foreground);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.vc-recording-duration {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--muted-foreground);
+}
+
+.vc-recording-text {
+  margin: 0;
+  font-size: 0.875rem;
+  color: var(--foreground);
+}
+
+.vc-recording-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.vc-recording-audio {
+  height: 2rem;
+  flex: 1;
+  min-width: 0;
+}
+
+.vc-recording-download {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--ring);
+  text-decoration: none;
+  padding: 0.25rem 0.5rem;
+  border-radius: var(--radius-sm, 0.25rem);
+  border: 1px solid var(--border);
+  background: var(--secondary);
+  white-space: nowrap;
+}
+
+.vc-recording-download:hover {
+  opacity: 0.85;
 }
 
 /* ─── Session / Home Screen ─────────────────────────────────────────────── */

@@ -40,7 +40,7 @@ async def _ensure_voices():
         pass
 
 
-@router.get("/", response_model=List[Voice])
+@router.get("", response_model=List[Voice])
 async def get_voices():
     await _ensure_voices()
     supabase = get_supabase()

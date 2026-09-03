@@ -97,7 +97,7 @@ async def store_chunks_in_pinecone(document_id: str, session_id: Optional[str], 
                 "chunk_index": i,
                 "text": chunk,
                 "filename": filename,
-                "session_id": str(session_id) if session_id else None,
+                **({"session_id": str(session_id)} if session_id else {}),
             },
         })
 
@@ -139,6 +139,10 @@ async def retrieve_relevant_chunks(query: str, top_k: int = 3, session_id: Optio
         filter_dict["session_id"] = {"$eq": str(session_id)}
 
     chunks = await _query_pinecone(query_embedding, top_k, filter_dict if filter_dict else None)
+    if not chunks and session_id:
+        logger.info("RAG fallback: no chunks for session %s, retrying without filter", session_id)
+        chunks = await _query_pinecone(query_embedding, top_k, None)
+        logger.info("RAG fallback result for session %s: %s chunks", session_id, len(chunks))
     return chunks
 
 
