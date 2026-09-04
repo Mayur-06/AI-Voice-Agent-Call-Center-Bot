@@ -87,7 +87,10 @@ class ConnectionManager:
 
     async def send_bytes(self, session_id: str, data: bytes):
         if session_id in self.active_connections:
-            await self.active_connections[session_id].send_bytes(data)
+            try:
+                await self.active_connections[session_id].send_bytes(data)
+            except Exception as exc:
+                await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "error", "msg": f"WS send_bytes failed session={session_id} error={exc}"})
 
 
 async def _append_log(session_id: str, entry: dict) -> None:

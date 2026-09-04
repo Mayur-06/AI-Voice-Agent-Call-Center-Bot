@@ -118,11 +118,3 @@ class Recording(BaseModel):
     file_size: int
     created_at: datetime
 
-
-class Analytics(BaseModel):
-    total_sessions: int
-    total_turns: int
-    avg_latency_ms: float
-    interruption_count: int
-    avg_session_duration_s: float
-    sentiment_breakdown: Dict[str, int]

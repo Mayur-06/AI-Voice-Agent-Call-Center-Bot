@@ -24,7 +24,6 @@ const callStore = create((set) => ({
   audioChunks: [],
   ttsSourceNode: null,
   filler: null,
-  localRecordings: [],
 
   setSessionId: (sessionId) => {
     set({ sessionId });
@@ -57,11 +56,6 @@ const callStore = create((set) => ({
   setAudioChunks: (audioChunks) => set({ audioChunks }),
   setTtsSourceNode: (ttsSourceNode) => set({ ttsSourceNode }),
   setFiller: (filler) => set({ filler }),
-  addLocalRecording: (recording) =>
-    set((prev) => ({
-      localRecordings: [...prev.localRecordings, recording],
-    })),
-  clearLocalRecordings: () => set({ localRecordings: [] }),
 
   addTranscriptEntry: (entry) =>
     set((prev) => {
@@ -110,7 +104,6 @@ const callStore = create((set) => ({
       audioChunks: [],
       ttsSourceNode: null,
       filler: null,
-      localRecordings: [],
     });
     useSessionStore.getState().reset();
   },

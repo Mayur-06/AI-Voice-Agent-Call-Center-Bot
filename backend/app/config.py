@@ -20,13 +20,13 @@ class Settings(BaseSettings):
     supabase_password: str = ""
 
     audio_sample_rate: int = 16000
-    vad_aggressiveness: int = 1
+    vad_threshold: float = 0.1
     silence_threshold_ms: int = 2000
     audio_chunk_ms: int = 250
 
     ws_heartbeat_interval_s: int = 20
     ws_receive_timeout_s: int = 180
-    ws_max_concurrent_audio_tasks: int = 8
+    ws_max_concurrent_audio_tasks: int = 32
 
     pinecone_api_key: str = ""
     pinecone_index_name: str = "voice-agent-documents"

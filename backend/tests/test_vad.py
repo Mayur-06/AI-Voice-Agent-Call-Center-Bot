@@ -7,14 +7,14 @@ import pytest
 from app.services.vad import VADBuffer
 
 
-def _make_frame(value: bool, frame_size: int = 960) -> bytes:
+def _make_frame(value: bool, frame_size: int = 1024) -> bytes:
     sample = 0x7FFF if value else 0x0000
     return struct.pack(f"<{frame_size // 2}h", *(sample for _ in range(frame_size // 2)))
 
 
 @pytest.fixture
 def vad_buffer():
-    return VADBuffer(sample_rate=16000, frame_duration_ms=30)
+    return VADBuffer(sample_rate=16000, frame_duration_ms=32)
 
 
 def test_vad_initial_state(vad_buffer):
@@ -23,6 +23,7 @@ def test_vad_initial_state(vad_buffer):
 
 
 def test_vad_speech_onset(vad_buffer):
+    vad_buffer._is_speech = lambda frame: True
     frame = _make_frame(True)
     result, triggered = vad_buffer.process(frame)
     assert result is None

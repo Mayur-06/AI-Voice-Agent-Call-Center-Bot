@@ -85,7 +85,6 @@ export default function VoiceCallScreen() {
     latencies,
     filler,
     isCapturing,
-    localRecordings = [],
     startCall,
     stopCall,
     toggleCapture,
@@ -323,36 +322,7 @@ export default function VoiceCallScreen() {
             </Button>
           </div>
           <p className="vc-fallback-hint">Use text input if your microphone is unavailable.</p>
-        </div>
-
-        {Array.isArray(localRecordings) && localRecordings.length > 0 && (
-          <div className="vc-recordings-section">
-            <h3 className="vc-section-title">Local Recordings</h3>
-            <div className="vc-recordings-list">
-              {localRecordings.map((rec) => (
-                <div key={rec.id} className="vc-recording-entry">
-                  <div className="vc-recording-meta">
-                    <span className="vc-recording-time">
-                      {new Date(rec.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-                    </span>
-                    <span className="vc-recording-duration">{Math.round(rec.durationMs / 1000)}s</span>
-                  </div>
-                  <p className="vc-recording-text">{rec.transcript}</p>
-                  <div className="vc-recording-actions">
-                    <audio controls src={rec.wavUrl} className="vc-recording-audio" />
-                    <a
-                      href={rec.wavUrl}
-                      download={`recording-${new Date(rec.timestamp).getTime()}.wav`}
-                      className="vc-recording-download"
-                    >
-                      Download .wav
-                    </a>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
+      </div>
       </div>
     </div>
   );
