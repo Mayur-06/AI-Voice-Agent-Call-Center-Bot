@@ -14,6 +14,11 @@ class AudioBuffer:
     def get_bytes(self) -> bytes:
         return bytes(self._buffer)
 
+    def get_recent_bytes(self, max_bytes: int) -> bytes:
+        if len(self._buffer) <= max_bytes:
+            return bytes(self._buffer)
+        return bytes(self._buffer[-max_bytes:])
+
     def __len__(self) -> int:
         return len(self._buffer)
 

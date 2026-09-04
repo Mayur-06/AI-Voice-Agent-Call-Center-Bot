@@ -95,24 +95,29 @@ async def start_turn_with_filler(
     async def sentence_stream() -> Tuple[str, int]:
         nonlocal full_response, sentences_sent
         rag_context = context if context else None
+        buffer = ""
         async for chunk in generate_response_stream(conversation_mgr.get_history(), system_instruction, context=rag_context):
             full_response += chunk
+            buffer += chunk
             partial_response_container["text"] = full_response
-            sentences = await split_sentences(full_response)
+            sentences = await split_sentences(buffer)
             while len(sentences) > 1:
                 sentence = sentences.pop(0)
-                full_response = full_response[len(sentence):].lstrip()
+                buffer = buffer[len(sentence):].lstrip()
                 yield sentence, sentences_sent
                 sentences_sent += 1
-        if full_response.strip():
-            yield full_response.strip(), sentences_sent
+        if buffer.strip():
+            yield buffer.strip(), sentences_sent
             sentences_sent += 1
 
     try:
         await manager.send_json(session_id, {"type": "status", "message": "thinking"})
         await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "info", "msg": f"WS LLM stream started session={session_id}"})
         ai_recording_start_ms = int((time.perf_counter() - turn_start) * 1000) if turn_start else 0
-        _, tts_first_audio_latency_ms = await stream_sentences(session_id, sentence_stream(), voice_id)
+        sentences_sent, tts_first_audio_latency_ms = await asyncio.wait_for(
+            stream_sentences(session_id, sentence_stream(), voice_id),
+            timeout=90,
+        )
         ai_recording_end_ms = int((time.perf_counter() - turn_start) * 1000) if turn_start else ai_recording_start_ms
     except asyncio.TimeoutError:
         timeout_error = True

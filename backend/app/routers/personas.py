@@ -65,7 +65,7 @@ async def _ensure_personas():
         pass
 
 
-@router.get("/", response_model=List[Persona])
+@router.get("", response_model=List[Persona])
 async def list_personas():
     await _ensure_personas()
     supabase = get_supabase()
@@ -73,7 +73,7 @@ async def list_personas():
     return [Persona(**row) for row in (res.data or [])]
 
 
-@router.post("/", response_model=Persona, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=Persona, status_code=status.HTTP_201_CREATED)
 async def create_persona(persona_data: PersonaCreate):
     supabase = get_supabase()
     payload = _persona_row(persona_data.model_dump())

@@ -64,16 +64,16 @@ async def create_session(
     resolved_user_id = user_id or str(uuid.uuid4())
 
     payload = {
-        "persona_id": persona_id,
-        "user_id": resolved_user_id,
+        "persona_id": str(persona_id),
+        "user_id": str(resolved_user_id),
         "status": status,
         "selected_voice": selected_voice,
         "started_at": datetime.now(timezone.utc).isoformat(),
     }
     if session_id:
-        payload["id"] = session_id
+        payload["id"] = str(session_id)
     res = supabase.table("sessions").insert(payload).execute()
-    return res.data[0]["id"]
+    return str(res.data[0]["id"])
 
 
 async def save_turn(session_id: str, speaker: str, text: str, sentiment: str | None = None,
@@ -106,10 +106,10 @@ async def save_turn(session_id: str, speaker: str, text: str, sentiment: str | N
         "recording_end_ms": recording_end_ms,
     }
     if message_id:
-        payload["id"] = message_id
+        payload["id"] = str(message_id)
     res = supabase.table("messages").insert(payload).execute()
     inserted = res.data[0] if isinstance(res.data, list) and res.data else {}
-    return inserted.get("id")
+    return str(inserted.get("id")) if inserted.get("id") else None
 
 
 async def load_turns(session_id: str) -> list[dict[str, str]]:

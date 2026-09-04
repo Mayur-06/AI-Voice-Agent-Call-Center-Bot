@@ -4,7 +4,6 @@ from collections import deque
 from typing import Dict
 from fastapi import WebSocket
 
-
 SESSION_LOG_MAX = 200
 session_logs: dict[str, deque[dict]] = {}
 session_log_events: dict[str, list[asyncio.Event]] = {}
@@ -20,6 +19,12 @@ class ConnectionManager:
 
     async def connect(self, session_id: str, websocket: WebSocket):
         await websocket.accept()
+        old_ws = self.active_connections.get(session_id)
+        if old_ws is not None and old_ws is not websocket:
+            try:
+                await old_ws.close()
+            except Exception:
+                pass
         self.active_connections[session_id] = websocket
         self.recording_enabled[session_id] = False
         self.ai_audio_buffers[session_id] = bytearray()
@@ -90,6 +95,9 @@ async def _append_log(session_id: str, entry: dict) -> None:
     logs.append(entry)
     for ev in list(session_log_events.get(session_id, [])):
         ev.set()
+
+    from app.services.call_session_logger import append_log as _file_append_log
+    await _file_append_log(session_id, entry)
 
 
 async def _stream_session_logs(session_id: str):

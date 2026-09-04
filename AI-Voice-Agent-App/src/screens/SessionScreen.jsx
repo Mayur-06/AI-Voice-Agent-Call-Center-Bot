@@ -94,6 +94,9 @@ export default function SessionScreen() {
     setSelectedPersona,
     setSelectedVoiceId,
     startCall,
+    error,
+    setError,
+    sessionId,
   } = useVoiceCall();
 
   const [isStarting, setIsStarting] = useState(false);
@@ -102,11 +105,38 @@ export default function SessionScreen() {
   const [isUploading, setIsUploading] = useState(false);
   const [voices, setVoices] = useState([]);
   const [voicesLoading, setVoicesLoading] = useState(true);
+  const [pastSessions, setPastSessions] = useState([]);
+  const [sessionsLoading, setSessionsLoading] = useState(true);
   const fileInputRef = useRef(null);
   const dragCounterRef = useRef(0);
   const uploadedDocuments = useCallStore((s) => s.uploadedDocuments);
   const setUploadedDocuments = useCallStore((s) => s.setUploadedDocuments);
   const { previewingVoiceId, playPreview } = useVoicePreview();
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadSessions = async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/sessions`);
+        if (!cancelled && res.ok) {
+          const data = await res.json();
+          setPastSessions(Array.isArray(data) ? data.slice(0, 20) : []);
+        }
+      } catch {
+        if (!cancelled) {
+          setPastSessions([]);
+        }
+      } finally {
+        if (!cancelled) {
+          setSessionsLoading(false);
+        }
+      }
+    };
+    loadSessions();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -151,13 +181,18 @@ export default function SessionScreen() {
     fileArray.forEach((file) => formData.append('files', file));
 
     try {
-      const res = await fetch(`${API_BASE}/api/documents/upload`, {
+      const url = new URL(`${API_BASE}/api/documents/upload`);
+      if (sessionId) {
+        url.searchParams.set('session_id', sessionId);
+      }
+      const res = await fetch(url.toString(), {
         method: 'POST',
         body: formData,
       });
       if (!res.ok) throw new Error('Upload failed');
       const data = await res.json();
-      setUploadedDocuments((prev) => [...prev, ...data.documents]);
+      const docs = Array.isArray(data.documents) ? data.documents : [];
+      setUploadedDocuments((prev) => [...prev, ...docs]);
     } catch (err) {
       setUploadError(err instanceof Error ? err.message : 'Upload failed');
     } finally {
@@ -242,9 +277,26 @@ export default function SessionScreen() {
     <div className="session-screen">
       <div className="session-container">
         <div className="session-header">
-          <h1 className="session-title">AI Voice Agent</h1>
-          <p className="session-subtitle">Select a persona, choose a voice, upload documents and start your session.</p>
+          <div className="session-header-top">
+            <div>
+              <h1 className="session-title">AI Voice Agent</h1>
+              <p className="session-subtitle">Select a persona, choose a voice, upload documents and start your session.</p>
+            </div>
+            <div className="session-nav">
+              <Button variant="outline" size="sm" onClick={() => navigate('/analytics')}>
+                Analytics Dashboard
+              </Button>
+            </div>
+          </div>
         </div>
+
+        {error && (
+          <div className="vc-error-banner">
+            <span className="vc-error-icon">!</span>
+            <span className="vc-error-text">{error}</span>
+            <button className="vc-error-dismiss" onClick={() => setError(null)}>x</button>
+          </div>
+        )}
 
         <div className="session-body">
           <section className="session-section">
@@ -363,23 +415,48 @@ export default function SessionScreen() {
                   </button>
                 </div>
                 <ul className="document-list">
-                  {uploadedDocuments.map((doc, idx) => (
-                    <li key={doc.id || idx} className="document-item">
-                      <span className="document-item-name">{doc.filename || doc.name || `Document ${idx + 1}`}</span>
-                      <button
-                        type="button"
-                        className="document-item-remove"
-                        onClick={() => removeDocument(idx)}
-                        aria-label={`Remove ${doc.filename || doc.name || `Document ${idx + 1}`}`}
-                      >
-                        ×
-                      </button>
-                    </li>
-                  ))}
+                  {uploadedDocuments.map((doc, idx) => {
+                    const id = doc?.id != null ? String(doc.id) : String(idx);
+                    const filename = typeof doc?.filename === 'string' ? doc.filename : (typeof doc?.name === 'string' ? doc.name : `Document ${idx + 1}`);
+                    return (
+                      <li key={id} className="document-item">
+                        <span className="document-item-name">{filename}</span>
+                        <button
+                          type="button"
+                          className="document-item-remove"
+                          onClick={() => removeDocument(idx)}
+                          aria-label={`Remove ${filename}`}
+                        >
+                          ×
+                        </button>
+                      </li>
+                    );
+                  })}
                 </ul>
               </div>
             )}
           </section>
+
+          {!sessionsLoading && pastSessions.length > 0 && (
+            <section className="session-section">
+              <h2 className="session-section-title">Past Sessions</h2>
+              <div className="past-sessions-list">
+                {pastSessions.map((session) => (
+                  <button
+                    key={session.id}
+                    type="button"
+                    className="past-session-item"
+                    onClick={() => navigate(`/review/${session.id}`)}
+                  >
+                    <span className="past-session-id">{session.id}</span>
+                    <span className="past-session-meta">
+                      {session.status || 'completed'} · {session.started_at ? new Date(session.started_at).toLocaleString() : 'no date'}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </section>
+          )}
         </div>
 
         <div className="session-footer">

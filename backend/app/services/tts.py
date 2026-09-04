@@ -1,6 +1,7 @@
 import asyncio
 import io
 import logging
+import re
 import time
 from datetime import datetime, timezone
 from typing import AsyncIterable, Tuple
@@ -11,6 +12,28 @@ from app.models.database import get_supabase
 from app.websocket.manager import manager, _append_log
 
 logger = logging.getLogger(__name__)
+
+_MARKDOWN_PATTERN = re.compile(
+    r"(\*\*|__)(.*?)\1|"          # bold
+    r"(?<!\\)(\*|_)(.*?)\3|"      # italic
+    r"`{1,3}([^`]+)`{1,3}|"       # code
+    r"!\[[^\]]*\]\([^)]*\)|"      # images
+    r"\[([^\]]+)\]\([^)]*\)|"     # links
+    r"^\s*[-*]\s+|"               # list bullets
+    r"^\s*#{1,6}\s+|"             # headings
+    r"^\s*>\s+|"                  # blockquotes
+    r"^\s*(\d+\.\s*)|"            # ordered lists
+    r"---|___|\*\*\*",            # horizontal rules
+    re.MULTILINE,
+)
+
+
+def strip_markdown(text: str) -> str:
+    cleaned = _MARKDOWN_PATTERN.sub(
+        lambda m: m.group(2) or m.group(4) or m.group(5) or m.group(6) or "", text
+    )
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned
 
 
 async def get_persona_voice_id(persona_id: str) -> str:
@@ -43,6 +66,8 @@ async def stream_sentences(
     sentences: AsyncIterable[Tuple[str, int]],
     voice_id: str,
 ) -> Tuple[int, int | None]:
+    if not isinstance(voice_id, str) or not voice_id:
+        voice_id = "en-IN-NeerjaNeural"
     sentences_sent = 0
     first_sentence_queued_time: float | None = None
     first_audio_chunk_time: float | None = None
@@ -58,7 +83,8 @@ async def stream_sentences(
         audio_buffer = bytearray()
         first_chunk_received = False
         try:
-            async for audio_chunk in synthesize_speech_stream(sentence, voice_id):
+            spoken_text = strip_markdown(sentence)
+            async for audio_chunk in synthesize_speech_stream(spoken_text, voice_id):
                 if not first_chunk_received:
                     first_audio_chunk_time = time.perf_counter()
                     first_chunk_received = True

@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, File, UploadFile, Query, HTTPException
 from app.models.database import get_supabase, get_storage_admin
 from app.services.rag import split_text, generate_embeddings, index_document
-from app.services.storage import upload_document, ensure_documents_bucket
+from app.services.storage import upload_document as upload_document_to_storage, ensure_documents_bucket
 from app.config import settings
 from PyPDF2 import PdfReader
 import uuid
@@ -11,7 +11,7 @@ from typing import List
 router = APIRouter(prefix="/api/documents", tags=["documents"])
 
 
-@router.get("/")
+@router.get("")
 async def list_documents():
     supabase = get_supabase()
     res = supabase.table("documents").select("*").order("uploaded_at", desc=True).execute()
@@ -56,7 +56,7 @@ async def upload_document(
             raise HTTPException(status_code=400, detail=f"No text could be extracted from document {filename}")
 
         doc_id = str(uuid.uuid4())
-        storage_path = upload_document(content_bytes, filename, file_type)
+        storage_path = await upload_document_to_storage(content_bytes, filename, file_type)
 
         supabase = get_supabase()
         insert_res = supabase.table("documents").insert({

@@ -5,7 +5,7 @@ from app.models.database import get_supabase
 router = APIRouter(prefix="/api/analytics", tags=["analytics"])
 
 
-@router.get("/")
+@router.get("")
 async def get_analytics():
     supabase = get_supabase()
     now = datetime.now(timezone.utc)

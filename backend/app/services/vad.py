@@ -11,6 +11,7 @@ class VADBuffer:
         self.buffer: collections.deque = collections.deque()
         self.triggered = False
         self.speech_frames: collections.deque = collections.deque()
+        self._pending_pcm: bytearray = bytearray()
 
     def process(self, frame: bytes) -> tuple[bytes | None, bool]:
         is_speech = self.vad.is_speech(frame, self.sample_rate)
@@ -34,7 +35,30 @@ class VADBuffer:
                 return audio, True
             return None, False
 
+    def process_bytes(self, data: bytes, frame_size: int) -> tuple[bytes | None, bool]:
+        self._pending_pcm.extend(data)
+        last_result: tuple[bytes | None, bool] = (None, False)
+        while len(self._pending_pcm) >= frame_size:
+            frame = bytes(self._pending_pcm[:frame_size])
+            del self._pending_pcm[:frame_size]
+            try:
+                last_result = self.process(frame)
+            except Exception:
+                last_result = (None, False)
+            if last_result[0] is not None:
+                break
+        return last_result
+
     def reset(self):
         self.triggered = False
         self.buffer.clear()
         self.speech_frames.clear()
+        self._pending_pcm.clear()
+
+    def flush(self) -> bytes | None:
+        if not self.speech_frames:
+            self.reset()
+            return None
+        audio = b"".join(self.speech_frames)
+        self.reset()
+        return audio

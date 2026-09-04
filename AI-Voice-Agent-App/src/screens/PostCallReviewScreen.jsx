@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useMemo } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router-dom';
 import { API_BASE } from '@/config';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend,
@@ -10,6 +10,7 @@ const COLORS = ['#22c55e', '#eab308', '#ef4444', '#a855f7'];
 
 export default function PostCallReviewScreen() {
   const { sessionId } = useParams();
+  const navigate = useNavigate();
   const [session, setSession] = useState(null);
   const [summary, setSummary] = useState('');
   const [recordingUrl, setRecordingUrl] = useState(null);
@@ -169,7 +170,17 @@ export default function PostCallReviewScreen() {
 
   return (
     <div className="p-6 space-y-6">
-      <h1 className="text-2xl font-semibold">Post-Call Review</h1>
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-semibold">Post-Call Review</h1>
+        <div className="flex gap-2">
+          <Button variant="outline" size="sm" onClick={() => navigate('/session')}>
+            New Session
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => navigate('/analytics')}>
+            Analytics Dashboard
+          </Button>
+        </div>
+      </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <div className="border rounded-lg p-4">
