@@ -1,4 +1,5 @@
 import logging
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -19,7 +20,18 @@ async def lifespan(app: FastAPI):
     check_pinecone_health()
     ensure_documents_bucket()
     ensure_recordings_bucket()
-    yield
+    app.state.audio_executor = ThreadPoolExecutor(
+        max_workers=settings.ws_audio_executor_workers,
+        thread_name_prefix="audio",
+    )
+    app.state.embedding_executor = ProcessPoolExecutor(
+        max_workers=settings.ws_embedding_executor_workers,
+    )
+    try:
+        yield
+    finally:
+        app.state.audio_executor.shutdown(wait=True)
+        app.state.embedding_executor.shutdown(wait=True)
 
 
 app = FastAPI(title="AI Voice Agent Backend", version="1.0.0", lifespan=lifespan)

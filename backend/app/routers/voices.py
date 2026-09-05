@@ -50,7 +50,7 @@ async def get_voices():
 
 @router.get("/{voice_id}/preview")
 async def preview_voice(voice_id: str):
-    voice = next((v for v in _VOICES if v["voice_id"] == voice_id or v["id"] == voice_id), None)
+    voice = next((v for v in _VOICES if v["voice_id"] == voice_id), None)
     if not voice:
         raise HTTPException(status_code=404, detail="Voice not found")
 

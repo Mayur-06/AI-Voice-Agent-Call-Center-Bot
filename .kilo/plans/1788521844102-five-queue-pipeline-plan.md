@@ -1,5 +1,22 @@
 # Five-Queue Decoupled WebSocket Voice Pipeline — Implementation Plan
 
+> **Revision note:** Fixes 5 issues found in review of the original AI-generated plan:
+> (1) `event_queue` had two competing consumers (`ws_out_task` and the handler loop) — split
+> into `control_queue` (handler-only) and `ws_event_queue` (`ws_out_task`-only), see §3.2.
+> (2) Barge-in was cooperative-only (`current_turn_id` check) despite §7 claiming
+> `task.cancel()` — RAG+LLM and TTS turns now run as tracked child tasks the supervisor can
+> actually hard-cancel. (3) `is_speaking` was reset after every sentence, not per turn,
+> creating a window where a mid-turn barge-in wouldn't register — now turn-scoped. (4) No
+> `QueueFull` handling despite §11.6 expecting drop-on-full behavior — added `safe_put_nowait`.
+> (5) `websocket.ping` / `send_pong()` aren't real Starlette APIs — removed, app-level
+> heartbeat is JSON-only.
+>
+> **Second revision:** Checked against `AI_Voice_Agent_Backend_Frontend_Database_Plan.md`
+> (the project plan) and found 4 conflicts with decisions it explicitly makes, plus 3 gaps
+> in latency/sync tracking it requires. Resolved as three phases — §15, §16, §17. Real-time
+> frustrated-sentiment alert (§9 of the project plan) is intentionally deferred, not covered
+> by any phase.
+
 ## 1. Goal
 
 Refactor `backend/app/websocket/handler.py` from a 692-line monolith into a strict
@@ -23,34 +40,46 @@ executors by workload type, and makes barge-in instant.
 
 ```
 [WS In Task] ──pushes audio──▶ Audio In Queue ──▶ [VAD/STT Task] ──pushes text──▶ Text In Queue
-     │                              ▲                                                    │
-     │  answers pong                 │              [RAG+LLM Task] ◀───────────────────┘
-     │                              │                     │
-     │                              │                     ▼
-     │                              │              Sentence Queue
-     │                              │                     │
-     │                              │                     ▼
-     │                              │               [TTS Task]
-     │                              │                     │
-     │                              │                     ▼
-     │                              │              Audio Out Queue
-     │                              │                     │
-     │                              └─────────────────────┘
-     │                                                    │
-     ▼                                                    ▼
-[WS Out Task] ◀─────── event queue (status / turn_ended / sentiment / error)
+     │                                                    │                            │
+     │  answers app-level ping/pong                       │              [RAG+LLM Task] ◀┘
+     │                                                    │                     │
+     │  routes control msgs ──▶ Control Queue ──▶ [Handler loop]                ▼
+     │                                                    │              Sentence Queue
+     │                                                    │                     │
+     │                                                    │                     ▼
+     │                                                    │               [TTS Task]
+     │                                                    │                     │
+     │                                                    │                     ▼
+     │                                                    │              Audio Out Queue
+     │                                                    │                     │
+     ▼                                                    ▼                     ▼
+[WS Out Task] ◀────────────────────── WS Event Queue (status/transcript/sentiment/error/turn_ended)
 ```
+
+**Note:** `event_queue` from the original design is split into two single-consumer queues
+(see §3.2) — this was the plan's biggest bug: two tasks (`ws_out_task` and the handler loop)
+were both draining the same `asyncio.Queue`, which silently splits events between them in
+whichever order `.get()` happens to win.
 
 ### 3.1 Stage Contracts
 
 | Stage | Input | Output | Executor |
 |---|---|---|---|
-| WS In Task | `websocket.receive()` | Audio In Queue + pong | — (pure async I/O) |
-| VAD/STT Task | Audio In Queue | Text In Queue OR WS Out event | `AudioExecutor` (TPE) |
+| WS In Task | `websocket.receive()` | Audio In Queue + Control Queue + app-level pong | — (pure async I/O) |
+| VAD/STT Task | Audio In Queue | Text In Queue OR WS Event Queue (`empty_transcript`, `stt_timeout`) | `AudioExecutor` (TPE) |
 | RAG+LLM Task | Text In Queue | Sentence Queue | `EmbeddingExecutor` (PPE) for embeddings; Gemini is async HTTP |
 | TTS Task | Sentence Queue | Audio Out Queue + `await asyncio.sleep(0)` per chunk | `AudioExecutor` (TPE) for strip_markdown |
-| WS Out Task | Audio Out Queue + event queue | `websocket.send_bytes()` / `send_json()` | — (pure async I/O) |
-| Supervisor | All queues | Cancel + drain + barge-in events | — |
+| WS Out Task | Audio Out Queue + **WS Event Queue only** | `websocket.send_bytes()` / `send_json()` | — (pure async I/O) |
+| Handler loop | **Control Queue only** | Mutates `state` (auth, voice_select), calls `pipeline.handle_barge_in()` | — |
+| Supervisor | `speech_detected` event, turn task handles | Hard-cancels turn tasks + drains + barge-in events | — |
+
+### 3.2 Queue Ownership Rule
+
+Every queue has **exactly one** consumer task. `event_queue` is replaced by two queues:
+- **`control_queue`** — client-originated control messages (`auth`, `voice_select`, `cancel_turn`,
+  `force_stt`, `external_transcript`, `stop_call`, `disconnect`). Consumed only by the handler loop.
+- **`ws_event_queue`** — server-originated events destined for the client (`status`, `transcript`,
+  `sentiment`, `error`, `turn_ended`, `tts_first_audio`, `filler`). Consumed only by `ws_out_task`.
 
 ## 4. New Files to Create
 
@@ -67,12 +96,13 @@ class SessionPipelineState:
     voice_id: str
     websocket: WebSocket
 
-    # Queues (bounded to prevent memory leaks)
+    # Queues (bounded to prevent memory leaks) — each has exactly one consumer
     audio_in_queue: asyncio.Queue[bytes | None]
     text_in_queue: asyncio.Queue[TextInMessage | None]
     sentence_queue: asyncio.Queue[SentenceMessage | None]
     audio_out_queue: asyncio.Queue[bytes | None]
-    event_queue: asyncio.Queue[dict | None]
+    control_queue: asyncio.Queue[dict | None]      # consumed only by handler loop
+    ws_event_queue: asyncio.Queue[dict | None]      # consumed only by ws_out_task
 
     # Tasks
     ws_in_task: asyncio.Task | None = None
@@ -82,14 +112,27 @@ class SessionPipelineState:
     ws_out_task: asyncio.Task | None = None
     supervisor_task: asyncio.Task | None = None
 
+    # Per-turn sub-tasks — tracked so the supervisor can hard-cancel them,
+    # not just flag them via current_turn_id (see §7).
+    active_llm_subtask: asyncio.Task | None = None
+    active_tts_subtask: asyncio.Task | None = None
+
     # Shared state
     conversation_mgr: ConversationManager
     vad: VADBuffer
     current_turn_id: str | None = None
-    is_speaking: bool = False        # True while TTS is streaming AI audio
+    is_speaking: bool = False        # Turn-scoped: True from first sentence queued
+                                      # to end-of-turn/barge-in — NOT reset per sentence
     speech_detected: asyncio.Event   # Set by VAD/STT when speech_ended fires
     cancelled_turns: set[str]        # Track cancelled turn IDs for idempotency
-    barge_in_event: asyncio.Event    # Set when barge-in is needed
+
+    # Phase 1 (§15) — protocol alignment
+    call_started: bool = False       # Set on start_call; vad_stt_task drops audio until then
+    event_seq: int = 0               # Incrementing sequence_number for every ws_event_queue event
+
+    # Phase 3 (§17) — latency & recording-sync metrics
+    call_start_time: float | None = None   # perf_counter() at start_call; recording offsets are relative to this
+    turn_started_at: float | None = None   # perf_counter() when current turn began (for total_turn_latency_ms)
 ```
 
 **`FiveQueuePipeline`** — factory + lifecycle manager:
@@ -97,7 +140,10 @@ class SessionPipelineState:
 - `create_session_pipeline(state) -> SessionPipelineState`
 - `start_pipeline(state) -> None` — launches all 5 tasks + supervisor
 - `stop_pipeline(state) -> None` — cancels all tasks, drains queues, awaits cleanup
-- `handle_barge_in(state) -> None` — cancels in-flight LLM/TTS, drains queues, emits events
+- `async handle_barge_in(state) -> None` — same hard-cancel logic as the supervisor's barge-in
+  branch (§4.2); exposed here too so an explicit client-sent `cancel_turn` control message
+  can trigger it directly, not just VAD-detected speech. **Async** because it awaits the
+  cancelled sub-tasks before returning, so callers know the turn is fully torn down.
 
 ### 4.2 `backend/app/orchestration/stages.py`
 
@@ -106,34 +152,49 @@ All five stage task factories plus the supervisor:
 #### WS In Task
 ```python
 async def ws_in_task(state: SessionPipelineState) -> None:
+    # NOTE: Starlette's WebSocket does not surface ASGI-level ping/pong frames to
+    # application code — that's handled transparently by uvicorn (ws_ping_interval /
+    # ws_ping_timeout in §5.1). Do not branch on msg["type"] == "websocket.ping" or
+    # call websocket.send_pong() — neither exists in Starlette's public API. Heartbeat
+    # is application-level JSON only, handled below.
     while True:
         msg = await state.websocket.receive()
         if msg["type"] == "websocket.disconnect":
-            state.event_queue.put_nowait({"type": "disconnect"})
+            safe_put_nowait(state.control_queue, {"type": "disconnect"})
             break
-        if msg["type"] == "websocket.ping":
-            await state.websocket.send_pong(msg.get("data", b""))
-            continue  # Never queued — answered immediately
         if "bytes" in msg:
-            state.audio_in_queue.put_nowait(msg["bytes"])
+            safe_put_nowait(state.audio_in_queue, msg["bytes"])
         elif "text" in msg:
             data = json.loads(msg["text"])
             if data.get("type") == "ping":
                 await state.websocket.send_text(json.dumps({"type": "pong"}))
-                continue
+                continue  # Answered immediately, never queued
             if data.get("type") == "stop_call":
-                state.event_queue.put_nowait({"type": "stop_call"})
+                safe_put_nowait(state.control_queue, {"type": "stop_call"})
                 break
             if data.get("type") == "stop_playback":
-                state.event_queue.put_nowait({"type": "cancel_turn"})
+                safe_put_nowait(state.control_queue, {"type": "cancel_turn"})
             elif data.get("type") == "stop_listening":
-                state.event_queue.put_nowait({"type": "force_stt", "data": data})
+                safe_put_nowait(state.control_queue, {"type": "force_stt", "data": data})
             elif data.get("type") == "transcript":
-                state.event_queue.put_nowait({"type": "external_transcript", "data": data})
+                safe_put_nowait(state.control_queue, {"type": "external_transcript", "data": data})
             elif data.get("type") == "auth":
-                state.event_queue.put_nowait({"type": "auth", "data": data})
+                safe_put_nowait(state.control_queue, {"type": "auth", "data": data})
             elif data.get("type") == "voice_select":
-                state.event_queue.put_nowait({"type": "voice_select", "data": data})
+                safe_put_nowait(state.control_queue, {"type": "voice_select", "data": data})
+```
+
+`safe_put_nowait` (used by every producer in this pipeline — see §6.1) wraps `put_nowait`
+so a full queue drops the item and logs instead of raising unhandled `QueueFull`:
+
+```python
+def safe_put_nowait(queue: asyncio.Queue, item) -> bool:
+    try:
+        queue.put_nowait(item)
+        return True
+    except asyncio.QueueFull:
+        logger.warning("queue_full_dropped", queue=queue, item_type=type(item).__name__)
+        return False
 ```
 
 #### VAD/STT Task
@@ -174,23 +235,23 @@ async def vad_stt_task(state: SessionPipelineState, audio_executor) -> None:
         try:
             user_text = await asyncio.wait_for(transcribe_audio(wav_audio), timeout=15)
         except asyncio.TimeoutError:
-            state.event_queue.put_nowait({"type": "error", "message": "stt_timeout"})
+            safe_put_nowait(state.ws_event_queue, {"type": "error", "message": "stt_timeout"})
             continue
 
         stt_latency_ms = int((time.perf_counter() - stt_start) * 1000)
 
         if not user_text or is_noisy_transcription(user_text):
-            state.event_queue.put_nowait({
+            safe_put_nowait(state.ws_event_queue, {
                 "type": "status", "message": "empty_transcript",
                 "stt_latency_ms": stt_latency_ms
             })
             continue
 
-        state.event_queue.put_nowait({
+        safe_put_nowait(state.ws_event_queue, {
             "type": "transcript", "role": "user", "text": user_text
         })
 
-        state.text_in_queue.put_nowait(TextInMessage(
+        safe_put_nowait(state.text_in_queue, TextInMessage(
             session_id=state.session_id,
             text=user_text,
             stt_latency_ms=stt_latency_ms,
@@ -198,6 +259,12 @@ async def vad_stt_task(state: SessionPipelineState, audio_executor) -> None:
 ```
 
 #### RAG+LLM Task
+The outer loop is a perpetual consumer of `text_in_queue`. Each turn's actual work runs as a
+**separate child task** (`state.active_llm_subtask`), spawned with `asyncio.create_task()` and
+awaited. This is what lets the supervisor hard-cancel a stuck turn (§7) via `task.cancel()`
+without also killing the outer loop — cancelling the outer task would stop it from ever
+consuming the *next* turn.
+
 ```python
 async def rag_llm_task(state: SessionPipelineState, embedding_executor) -> None:
     while True:
@@ -208,13 +275,21 @@ async def rag_llm_task(state: SessionPipelineState, embedding_executor) -> None:
         turn_id = str(uuid.uuid4())
         state.current_turn_id = turn_id
 
+        subtask = asyncio.create_task(_run_llm_turn(state, msg, turn_id, embedding_executor))
+        state.active_llm_subtask = subtask
+        with suppress(asyncio.CancelledError):
+            await subtask
+        state.active_llm_subtask = None
+
+
+async def _run_llm_turn(state, msg, turn_id, embedding_executor) -> None:
         # 1. Append user turn to conversation history
         state.conversation_mgr.append_user(msg.text)
 
         # 2. Sentiment (async LangGraph — event loop)
         try:
             sentiment = await analyze_sentiment(msg.text)
-            state.event_queue.put_nowait({"type": "sentiment", "label": sentiment})
+            safe_put_nowait(state.ws_event_queue, {"type": "sentiment", "label": sentiment})
         except Exception:
             sentiment = "neutral"
 
@@ -234,8 +309,13 @@ async def rag_llm_task(state: SessionPipelineState, embedding_executor) -> None:
         # 4. Get system prompt
         system_instruction = await get_persona_system_prompt(state.persona_id)
 
-        # 5. Stream LLM tokens, split into sentences, push to Sentence Queue
-        state.event_queue.put_nowait({"type": "status", "message": "thinking"})
+        # 5. Stream LLM tokens, split into sentences, push to Sentence Queue.
+        # is_speaking is turn-scoped: set once, here, before any sentence is queued —
+        # NOT re-set per sentence in the TTS task (that was the original race: TTS cleared
+        # it after every sentence, so a barge-in landing in the gap between two sentences
+        # of the same turn would be missed by the supervisor).
+        state.is_speaking = True
+        safe_put_nowait(state.ws_event_queue, {"type": "status", "message": "thinking"})
         full_response = ""
         buffer = ""
         sentence_idx = 0
@@ -244,7 +324,7 @@ async def rag_llm_task(state: SessionPipelineState, embedding_executor) -> None:
         async def _filler_monitor():
             await asyncio.sleep(settings.filler_threshold_ms / 1000)
             if state.current_turn_id == turn_id:
-                state.event_queue.put_nowait({"type": "filler"})
+                safe_put_nowait(state.ws_event_queue, {"type": "filler"})
 
         filler = asyncio.create_task(_filler_monitor())
 
@@ -255,7 +335,7 @@ async def rag_llm_task(state: SessionPipelineState, embedding_executor) -> None:
                 context=context if context else None,
             ):
                 if state.current_turn_id != turn_id:
-                    break  # Barge-in
+                    break  # Barge-in (cooperative fallback — see hard-cancel note below)
                 full_response += chunk
                 buffer += chunk
                 sentences = await split_sentences(buffer)
@@ -264,8 +344,8 @@ async def rag_llm_task(state: SessionPipelineState, embedding_executor) -> None:
                     buffer = buffer[len(sentence):].lstrip()
                     if not first_audio_sent:
                         first_audio_sent = True
-                        state.event_queue.put_nowait({"type": "status", "message": "speaking"})
-                    state.sentence_queue.put_nowait(SentenceMessage(
+                        safe_put_nowait(state.ws_event_queue, {"type": "status", "message": "speaking"})
+                    safe_put_nowait(state.sentence_queue, SentenceMessage(
                         text=sentence,
                         turn_id=turn_id,
                         index=sentence_idx,
@@ -274,7 +354,7 @@ async def rag_llm_task(state: SessionPipelineState, embedding_executor) -> None:
                     sentence_idx += 1
                     await asyncio.sleep(0)  # Yield after each sentence queued
         except asyncio.CancelledError:
-            pass
+            raise  # Propagate — let the outer create_task() see the cancellation
         finally:
             filler.cancel()
             with suppress(asyncio.CancelledError):
@@ -282,33 +362,29 @@ async def rag_llm_task(state: SessionPipelineState, embedding_executor) -> None:
 
         # Flush remaining buffer
         if buffer.strip() and state.current_turn_id == turn_id:
-            state.sentence_queue.put_nowait(SentenceMessage(
+            safe_put_nowait(state.sentence_queue, SentenceMessage(
                 text=buffer.strip(), turn_id=turn_id, index=sentence_idx
             ))
 
-        # Signal end-of-turn
-        state.sentence_queue.put_nowait(None)
+        # Signal end-of-turn — TTS task clears is_speaking when it drains this sentinel
+        safe_put_nowait(state.sentence_queue, None)
 ```
 
 #### TTS Task
 ```python
 async def tts_task(state: SessionPipelineState, audio_executor) -> None:
-    first_chunk_time: float | None = None
-    sentence_start_time: float | None = None
-
     while True:
         msg = await state.sentence_queue.get()
         if msg is None:
-            break
+            state.is_speaking = False  # End-of-turn sentinel — clear here, not per-sentence
+            continue
         if msg.turn_id != state.current_turn_id:
             continue  # Stale sentence from cancelled turn
 
-        state.is_speaking = True
         sentence_start_time = time.perf_counter()
         if msg.first_sentence:
-            state.event_queue.put_nowait({"type": "tts_first_sentence", "turn_id": msg.turn_id})
+            safe_put_nowait(state.ws_event_queue, {"type": "tts_first_sentence", "turn_id": msg.turn_id})
 
-        audio_buffer = bytearray()
         first_chunk = True
         try:
             spoken = await asyncio.get_running_loop().run_in_executor(
@@ -318,31 +394,33 @@ async def tts_task(state: SessionPipelineState, audio_executor) -> None:
                 if msg.turn_id != state.current_turn_id:
                     break
                 if first_chunk:
-                    first_chunk_time = time.perf_counter()
                     first_chunk = False
-                    state.event_queue.put_nowait({
+                    safe_put_nowait(state.ws_event_queue, {
                         "type": "tts_first_audio",
                         "turn_id": msg.turn_id,
-                        "latency_ms": int((first_chunk_time - sentence_start_time) * 1000),
+                        "latency_ms": int((time.perf_counter() - sentence_start_time) * 1000),
                     })
-                audio_buffer.extend(chunk)
-                state.audio_out_queue.put_nowait(bytes(chunk))
+                safe_put_nowait(state.audio_out_queue, bytes(chunk))
                 await asyncio.sleep(0)  # CRITICAL: yield per chunk
         except asyncio.CancelledError:
-            pass
+            raise
         except Exception as exc:
-            state.event_queue.put_nowait({"type": "error", "message": f"tts_failed:{exc}"})
-        state.is_speaking = False
+            safe_put_nowait(state.ws_event_queue, {"type": "error", "message": f"tts_failed:{exc}"})
 ```
+
+Each sentence's synthesis also runs as a tracked child task (`state.active_tts_subtask`),
+mirroring the RAG+LLM pattern, so the supervisor can hard-cancel a sentence stuck mid-stream
+on a slow Edge-TTS connection rather than waiting for the next chunk to yield.
 
 #### WS Out Task
 ```python
 async def ws_out_task(state: SessionPipelineState) -> None:
     while True:
-        # Prioritize events over audio, but don't starve audio
+        # Prioritize client-facing events over audio, but don't starve audio.
+        # Consumes ws_event_queue ONLY — control_queue belongs to the handler loop (§3.2).
         event = None
         try:
-            event = state.event_queue.get_nowait()
+            event = state.ws_event_queue.get_nowait()
         except asyncio.QueueEmpty:
             pass
 
@@ -358,7 +436,7 @@ async def ws_out_task(state: SessionPipelineState) -> None:
             try:
                 await state.websocket.send_bytes(audio_chunk)
             except Exception:
-                state.event_queue.put_nowait({"type": "disconnect"})
+                safe_put_nowait(state.control_queue, {"type": "disconnect"})
                 break
             continue
 
@@ -378,6 +456,9 @@ async def ws_out_task(state: SessionPipelineState) -> None:
 ```
 
 #### Supervisor Task
+Hard-cancels the tracked turn sub-tasks — not just a cooperative `current_turn_id` flag —
+so a stuck Gemini/Edge-TTS network await doesn't delay the barge-in past the target latency (§11.3).
+
 ```python
 async def supervisor_task(state: SessionPipelineState) -> None:
     while True:
@@ -385,8 +466,17 @@ async def supervisor_task(state: SessionPipelineState) -> None:
         state.speech_detected.clear()
 
         if state.is_speaking:
-            # Barge-in: cancel current turn, drain queues
-            state.current_turn_id = None  # Makes all stage tasks skip their work
+            # Barge-in: invalidate the turn id first so any task that yields between
+            # this point and its cancellation still sees a mismatch and stops cleanly.
+            state.current_turn_id = None
+
+            for subtask_attr in ("active_llm_subtask", "active_tts_subtask"):
+                subtask = getattr(state, subtask_attr)
+                if subtask is not None and not subtask.done():
+                    subtask.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await subtask
+
             # Drain Sentence Queue
             while not state.sentence_queue.empty():
                 try:
@@ -399,8 +489,10 @@ async def supervisor_task(state: SessionPipelineState) -> None:
                     state.audio_out_queue.get_nowait()
                 except asyncio.QueueEmpty:
                     break
-            state.event_queue.put_nowait({"type": "turn_ended", "reason": "interrupted"})
-            state.event_queue.put_nowait({"type": "status", "message": "idle"})
+
+            state.is_speaking = False
+            safe_put_nowait(state.ws_event_queue, {"type": "turn_ended", "reason": "interrupted"})
+            safe_put_nowait(state.ws_event_queue, {"type": "status", "message": "idle"})
 ```
 
 ## 5. Modified Files
@@ -483,11 +575,11 @@ async def websocket_voice(websocket: WebSocket, session_id: str):
         text_in_queue=asyncio.Queue(maxsize=settings.ws_queue_max_size),
         sentence_queue=asyncio.Queue(maxsize=settings.ws_queue_max_size),
         audio_out_queue=asyncio.Queue(maxsize=settings.ws_queue_max_size),
-        event_queue=asyncio.Queue(maxsize=settings.ws_queue_max_size),
+        control_queue=asyncio.Queue(maxsize=settings.ws_queue_max_size),
+        ws_event_queue=asyncio.Queue(maxsize=settings.ws_queue_max_size),
         conversation_mgr=conversation_mgr,
         vad=vad,
         speech_detected=asyncio.Event(),
-        barge_in_event=asyncio.Event(),
         cancelled_turns=set(),
     )
 
@@ -495,52 +587,42 @@ async def websocket_voice(websocket: WebSocket, session_id: str):
         audio_executor=websocket.app.state.audio_executor,
         embedding_executor=websocket.app.state.embedding_executor,
     )
-    pipeline.start(state)
+    pipeline.start(state)  # starts ws_in, vad_stt, rag_llm, tts, ws_out, supervisor
 
+    # This loop owns control_queue exclusively — it never touches ws_event_queue,
+    # and ws_out_task never touches control_queue. Client-facing sends (transcript,
+    # status, sentiment, error, turn_ended, tts_first_audio) are pushed straight to
+    # ws_event_queue by the stage tasks and sent by ws_out_task — this loop does not
+    # forward them, closing the original dual-consumer bug.
     try:
         while True:
-            event = await state.event_queue.get()
+            event = await state.control_queue.get()
             if event is None:
                 break
-            if event.get("type") == "disconnect":
-                break
-            if event.get("type") == "stop_call":
+            if event.get("type") in ("disconnect", "stop_call"):
                 break
             if event.get("type") == "auth":
                 data = event["data"]
                 state.persona_id = await resolve_persona_id(data.get("persona_id", state.persona_id))
                 state.voice_id = data.get("voice_id") or state.voice_id
-                await manager.send_json(session_id, {"type": "status", "message": "authenticated"})
+                safe_put_nowait(state.ws_event_queue, {"type": "status", "message": "authenticated"})
             elif event.get("type") == "voice_select":
                 state.voice_id = event["data"].get("voice_id") or state.voice_id
-                await manager.send_json(session_id, {"type": "status", "message": f"voice_selected:{state.voice_id}"})
+                safe_put_nowait(state.ws_event_queue, {"type": "status", "message": f"voice_selected:{state.voice_id}"})
             elif event.get("type") == "cancel_turn":
-                pipeline.handle_barge_in(state)
+                await pipeline.handle_barge_in(state)
             elif event.get("type") == "force_stt":
                 # Flush VAD and force STT
                 ...
             elif event.get("type") == "external_transcript":
                 data = event["data"]
-                state.text_in_queue.put_nowait(TextInMessage(
+                safe_put_nowait(state.text_in_queue, TextInMessage(
                     session_id=state.session_id,
                     text=data.get("text", ""),
                     stt_latency_ms=None,
                 ))
-            elif event.get("type") == "transcript":
-                await manager.send_json(session_id, event)
-            elif event.get("type") == "status":
-                await manager.send_json(session_id, event)
-            elif event.get("type") == "sentiment":
-                await manager.send_json(session_id, event)
-            elif event.get("type") == "error":
-                await manager.send_json(session_id, event)
-            elif event.get("type") == "tts_first_audio":
-                # Track latency metric
-                ...
-            elif event.get("type") == "turn_ended":
-                await manager.send_json(session_id, event)
     finally:
-        pipeline.stop(state)
+        await pipeline.stop(state)
         # Save recording, summary, end_session (existing logic)
         ...
 ```
@@ -559,9 +641,9 @@ async def stream_sentences(
     current_turn_ref: dict[str, str | None],
 ) -> Tuple[int, int | None]:
     # Same sentence loop, but instead of manager.send_bytes:
-    #   audio_out_queue.put_nowait(bytes(chunk))
+    #   safe_put_nowait(audio_out_queue, bytes(chunk))
     # Instead of manager.send_json:
-    #   event_queue.put_nowait({...})
+    #   safe_put_nowait(ws_event_queue, {...})   # NOT control_queue — client-facing only
     # Check current_turn_ref["turn_id"] for barge-in
 ```
 
@@ -591,39 +673,54 @@ The old `stream_sentences` call inside `start_turn_with_filler` is replaced with
 1. VAD/STT sets `state.speech_detected` event when `speech_ended=True`
 2. Supervisor task wakes on `speech_detected`
 3. If `state.is_speaking`:
-   - Sets `state.current_turn_id = None` (a new UUID, invalidating the old turn)
-   - Cancels the in-flight `rag_llm_task` and `tts_task` via `task.cancel()`
+   - Sets `state.current_turn_id = None`, invalidating the old turn for any cooperative
+     check that fires before hard-cancellation completes
+   - Hard-cancels `state.active_llm_subtask` and `state.active_tts_subtask` via
+     `task.cancel()` and awaits each — this is the actual bound on barge-in latency
+     (§11.3's 50ms target), not the cooperative `current_turn_id` check alone, which only
+     helps for in-between-chunk yields and can't interrupt a task blocked mid-await
    - Drains `sentence_queue` and `audio_out_queue` (non-blocking `get_nowait` loop)
-   - Emits `{"type": "turn_ended", "reason": "interrupted"}` to event queue
-   - Emits `{"type": "status", "message": "idle"}` to event queue
+   - Sets `state.is_speaking = False`
+   - Emits `{"type": "turn_ended", "reason": "interrupted"}` to `ws_event_queue`
+   - Emits `{"type": "status", "message": "idle"}` to `ws_event_queue`
 4. VAD/STT continues normally; the new utterance's transcript goes to `text_in_queue`
-5. RAG+LLM task picks it up and starts a new `current_turn_id`
+5. RAG+LLM task's outer loop (still alive — only the per-turn sub-task was cancelled)
+   picks it up and starts a new `current_turn_id`
 
 ## 8. Heartbeat Isolation
 
-- **Application-level ping/pong** (JSON `{"type":"ping"}` / `{"type":"pong"}`): handled exclusively by WS In Task — never queued, never delayed.
-- **ASGI/Uvicorn keepalive**: left to Uvicorn's default `ws_ping_interval` / `ws_ping_timeout`.
+- **Application-level ping/pong** (JSON `{"type":"ping"}` / `{"type":"pong"}`): handled exclusively
+  by WS In Task, answered inline via `websocket.send_text()` — never queued, never delayed. This
+  is the *only* heartbeat mechanism the application code touches.
+- **ASGI/Uvicorn keepalive**: left entirely to Uvicorn's own `ws_ping_interval` / `ws_ping_timeout`
+  — do not attempt to intercept it in application code. Starlette's `WebSocket.receive()` does not
+  surface ASGI-level ping/pong frames to the handler, so there is nothing to branch on here.
 - **No `asyncio.sleep()` in WS In/Out tasks** — they only block on `websocket.receive()` / `websocket.send_*()` / `queue.get()` with short timeouts.
 
 ## 9. Zero-Sleep Injection Rules
 
-Every tight loop that iterates over async generators or queues MUST yield:
+Every tight loop that iterates over async generators or queues MUST yield, and every
+`put_nowait` MUST go through `safe_put_nowait` (§4.2) to avoid an unhandled `QueueFull`:
 
 ```python
 # LLM token stream → sentence queue
 async for chunk in generate_response_stream(...):
     ...
-    state.sentence_queue.put_nowait(sentence)
+    safe_put_nowait(state.sentence_queue, sentence)
     await asyncio.sleep(0)   # ← required
 
 # TTS audio chunks → Audio Out Queue
 async for chunk in synthesize_speech_stream(...):
-    state.audio_out_queue.put_nowait(bytes(chunk))
+    safe_put_nowait(state.audio_out_queue, bytes(chunk))
     await asyncio.sleep(0)   # ← required
 
-# WS Out task event loop
+# WS Out task event loop — note ws_event_queue, not the removed event_queue,
+# and get_nowait() can raise QueueEmpty, so it's wrapped, not used as a boolean
 while True:
-    event = state.event_queue.get_nowait() or await audio_out_queue.get()
+    try:
+        event = state.ws_event_queue.get_nowait()
+    except asyncio.QueueEmpty:
+        event = await state.audio_out_queue.get()
     await websocket.send_*(...)
     # No sleep needed — send_* is true async I/O
 ```
@@ -635,7 +732,7 @@ while True:
 | `handler.py`: `_process_audio_chunk` | Logic moves to `vad_stt_task` |
 | `handler.py`: `_partial_stt_loop` + `partial_stt_task` | Superseded by VAD/STT task |
 | `handler.py`: `_handle_audio_message` | Logic moves to `vad_stt_task` |
-| `handler.py`: `_handle_control_message` | Logic moves to `ws_in_task` + event loop |
+| `handler.py`: `_handle_control_message` | Logic moves to `ws_in_task` (routing) + handler's `control_queue` loop (§5.3) |
 | `handler.py`: `_response_worker` + `response_queue` | Replaced by `text_in_queue` + `rag_llm_task` |
 | `handler.py`: `audio_tasks: set[Task]` | Replaced by pipeline task management |
 | `handler.py`: `processing_lock` | Not needed — each stage is single-task per session |
@@ -689,14 +786,158 @@ while True:
 | Risk | Mitigation |
 |---|---|
 | `ProcessPoolExecutor` startup overhead for SentenceTransformer | Pre-warm at app startup: `embedding_executor.submit(_get_model)` |
-| Queue memory leak on slow consumers | Bounded queues + `put_nowait` with drop-on-full |
-| Edge-TTS cancellation leaves dangling HTTP connections | `synthesize_speech_stream` catches `CancelledError` and closes `Communicate` |
+| Queue memory leak on slow consumers | Bounded queues + `safe_put_nowait` (§4.2) drop-on-full, applied consistently everywhere `put_nowait` is called |
+| Edge-TTS cancellation leaves dangling HTTP connections | `synthesize_speech_stream` catches `CancelledError` and closes `Communicate`; this now actually gets triggered promptly because the supervisor hard-cancels `active_tts_subtask` (§7) instead of relying only on the cooperative `turn_id` check |
 | Silero VAD model not thread-safe across sessions | VADBuffer is per-session; model singleton uses `threading.Lock` |
 | Supabase sync client called from PPE | All Supabase calls stay on default TPE, never PPE |
 
 ## 14. Open Questions
 
-1. **VAD backend**: The task spec mentions `webrtcvad`; the codebase uses Silero VAD. Should we add webrtcvad as an option or stick with Silero? → **Recommend**: Keep Silero (already working, better accuracy). webrtcvad would be a separate effort.
+1. ~~**VAD backend**~~ — **Closed in §16 (Phase 2): Silero VAD, confirmed.** The project plan's
+   webrtcvad reference is the stale document here and should be updated separately.
 2. **Partial STT**: The existing `_partial_stt_loop` does live partial transcription. The five-queue spec omits this. Should it be: (a) dropped, (b) moved into VAD/STT task as a side broadcast, or (c) kept as a separate optional stage? → **Recommend**: (b) — VAD/STT task can emit `partial_transcript` events to the event queue during speech.
 3. **Filler message timing**: Currently uses `asyncio.create_task` with `asyncio.sleep`. In the new pipeline, should the filler be managed by the RAG+LLM task or the Supervisor? → **Recommend**: RAG+LLM task owns its own filler timer (simpler, fewer moving parts).
 4. **Recording composition**: `compose_call_recording` runs at teardown. Should it run in the AudioExecutor? → **Yes** — move to AudioExecutor to avoid blocking the event loop during disconnect.
+
+## 15. Phase 1 — Protocol Alignment (resolves conflicts vs. project plan §10, §2)
+
+The project plan's §10 fixes the WebSocket message protocol as a scope decision, not a
+suggestion. The pipeline plan's original message set diverged from it in four ways. All four
+are fixed here before any stage code is finalized, since every other phase emits events
+through this protocol.
+
+### 15.1 `auth` message — removed entirely
+
+§2 states authentication is explicitly out of scope. The `auth` control message doesn't
+implement auth, but the name collides with that decision and isn't in §10's client message
+list at all. Persona and voice selection already happen through `POST /api/sessions` before
+the socket opens (§5.4, §6.3's Home/Session screen flow) — that's the source of truth.
+- Remove the `auth` branch from `ws_in_task` and the handler's `control_queue` loop.
+- `voice_select` is kept — it's a legitimate mid-call action (§6.3's Voice Call screen
+  doesn't preclude changing voice) and doesn't collide with any named-out-of-scope decision.
+  It's a protocol *extension* beyond §10, not a conflict; document it as such rather than
+  silently diverging.
+
+### 15.2 `start_call` — added, gates audio processing
+
+§10 lists `start_call` as a required client→server type; the original plan never handled it.
+Add `state.call_started: bool = False` to `SessionPipelineState`. `ws_in_task` handles it:
+
+```python
+if data.get("type") == "start_call":
+    state.call_started = True
+    safe_put_nowait(state.control_queue, {"type": "start_call"})
+    continue
+```
+
+`vad_stt_task` drops audio chunks silently until `state.call_started` is `True` — connection
+setup (session creation, pipeline task startup) still happens on WebSocket connect so `ping`
+can be answered immediately, but no audio is processed pre-`start_call`.
+
+### 15.3 Outbound event types — renamed/added to match §10 exactly
+
+| Original pipeline plan | §10-compliant | Change |
+|---|---|---|
+| `{"type": "transcript", "role": "user", ...}` | `{"type": "transcript_final", ...}` | Renamed in `vad_stt_task` — matches §10's note that only final transcripts are sent, never partial |
+| *(missing)* | `{"type": "turn_started", "turn_id": ...}` | Added — emitted by `_run_llm_turn` immediately after `state.current_turn_id = turn_id` is set, before sentiment/RAG |
+| *(missing)* | `{"type": "response_text", "turn_id": ..., "text": sentence, "index": sentence_idx}` | Added — emitted alongside every `sentence_queue` push in `_run_llm_turn`, so the client gets AI text before/alongside audio |
+| `{"type": "tts_first_audio", ...}` | `{"type": "response_audio", "turn_id": ..., "latency_ms": ...}` | Renamed in `tts_task` — this is the §10-required type; `tts_first_audio`/`tts_first_sentence` become internal latency-metric event names only, not sent as separate top-level types (folded into `response_audio`'s payload, see §17.1) |
+| `{"type": "sentiment", "label": ...}` | *(kept as-is, documented as extension)* | Not in §10 — §10 only has `sentiment_alert`, which is the deferred frustrated-sentiment feature (§9), a different thing. Keeping generic per-turn `sentiment` as a documented protocol extension avoids conflating "we send sentiment data" with "we implement the alert feature," which stays deferred. |
+
+### 15.4 Every event gets `session_id`, `sequence_number`, `timestamp`
+
+§10: "Every JSON/control event includes session_id, sequence_number and timestamp where
+applicable." None of the original pseudocode events carried these. Add a single helper and
+route every `ws_event_queue` push through it instead of raw dicts:
+
+```python
+def make_event(state: SessionPipelineState, event_type: str, **fields) -> dict:
+    state.event_seq += 1  # new counter field on SessionPipelineState, starts at 0
+    return {
+        "type": event_type,
+        "session_id": state.session_id,
+        "sequence_number": state.event_seq,
+        "timestamp": time.time(),
+        **fields,
+    }
+```
+
+Every `safe_put_nowait(state.ws_event_queue, {...})` call across `vad_stt_task`,
+`_run_llm_turn`, `tts_task`, and the supervisor becomes
+`safe_put_nowait(state.ws_event_queue, make_event(state, "...", **fields))`.
+`event_seq` must only be mutated from these single-threaded coroutines (no lock needed —
+everything already runs on the one event loop).
+
+## 16. Phase 2 — VAD: Confirmed Silero, Not webrtcvad
+
+**Decision: Silero VAD**, contradicting the project plan's §3/§5.1, which names `webrtcvad`.
+This is a deliberate override, not an oversight — flagging it explicitly so the project plan
+doc gets updated to match reality rather than the two documents silently disagreeing.
+
+- `services/vad.py`'s existing `VADBuffer` (Silero-based) is kept as-is (already listed in
+  §10's "Keep" list of the original plan).
+- Open Question #1 (§14) is now **closed**: Silero, full stop — remove the "webrtcvad as an
+  option" framing entirely, it's not being built.
+- Action outside this pipeline plan: update `AI_Voice_Agent_Backend_Frontend_Database_Plan.md`
+  §3 and §5.1 to say Silero VAD instead of webrtcvad, so the two docs stop disagreeing.
+- No code changes needed in `vad_stt_task` beyond what's already specified — it was already
+  written against `VADBuffer`/Silero's 32ms frame size; only the project-plan cross-reference
+  was wrong.
+
+## 17. Phase 3 — Latency & Recording-Sync Metrics (closes gaps, not conflicts)
+
+Three gaps the project plan requires that the pipeline plan didn't cover (§4 latency
+measurement, §7.2 DB columns, §12 recording sync). Sentiment alert is explicitly excluded
+per your note — not addressed here.
+
+### 17.1 `llm_latency_ms`
+
+Add to `_run_llm_turn`: start a timer right after `turn_started` is emitted (§15.3), stop it
+when the `async for chunk in generate_response_stream(...)` loop exits normally (not on
+cancellation — a cancelled turn has no meaningful LLM latency).
+
+```python
+llm_start = time.perf_counter()
+# ... existing sentiment/RAG/system-prompt prep, then the async for loop ...
+# after the loop (only if not cancelled/barged-in):
+if state.current_turn_id == turn_id:
+    llm_latency_ms = int((time.perf_counter() - llm_start) * 1000)
+```
+
+Attach `llm_latency_ms` to the `SentenceMessage` sentinel (`None`) push replaced with a final
+`TurnComplete` message carrying `{turn_id, llm_latency_ms}` so `tts_task` (or the handler,
+on `turn_ended`) can pass it through to `save_turn` for the `messages.llm_latency_ms` column.
+
+### 17.2 Total turn latency
+
+Defined as: time from `turn_started` to the turn's `response_audio` (first audio chunk) —
+matches the frontend's "Last response latency" state field (§6.4 of the project plan) and
+`messages.latency_ms` (§7.2). Computed in `tts_task` at the same point `response_audio` is
+emitted (§15.3):
+
+```python
+if msg.first_sentence and first_chunk:
+    total_turn_latency_ms = int((time.perf_counter() - state.turn_started_at) * 1000)
+```
+
+Requires `state.turn_started_at: float | None` set alongside `state.current_turn_id` in
+`_run_llm_turn` when the turn begins. Passed through to `save_turn` as `latency_ms`.
+
+### 17.3 Recording sync offsets (`recording_start_ms` / `recording_end_ms`)
+
+§12/§7.2 need each message's audio boundaries within the final composed call recording, not
+wall-clock time. Add `state.call_start_time: float` (set once, at `start_call`, §15.2).
+
+- **User turns**: `vad_stt_task` records `recording_start_ms = (utterance_start_perf_counter
+  - state.call_start_time) * 1000` when VAD detects speech onset, and
+  `recording_end_ms` when `speech_ended` fires. Requires `VADBuffer` to expose speech-onset
+  timestamp, not just the final audio bytes — check whether `services/vad.py` already tracks
+  this internally; if not, it's a small addition to `VADBuffer.process_bytes`.
+- **AI turns**: `tts_task` records `recording_start_ms` at the first audio chunk of the turn
+  and `recording_end_ms` when the sentinel/`TurnComplete` for that turn is processed (i.e.,
+  all sentences for the turn have been synthesized). Since audio composition
+  (`compose_call_recording`) appends AI audio after user audio per turn, these offsets are
+  relative to `state.call_start_time`, consistent with the user-turn offsets above.
+- Both get attached to the same turn record passed to `save_turn`, alongside `llm_latency_ms`
+  (§17.1) and `latency_ms` (§17.2) — one DB write per turn with all metrics populated, rather
+  than separate partial updates.
