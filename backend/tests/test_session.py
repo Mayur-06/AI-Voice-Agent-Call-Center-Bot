@@ -32,4 +32,6 @@ async def test_end_session(mock_settings):
     mock_supabase = MagicMock()
     with patch("app.services.session.get_supabase", return_value=mock_supabase):
         await end_session("session-1")
-    mock_supabase.table.assert_called_with("sessions")
+    calls = [call.args[0] for call in mock_supabase.table.call_args_list]
+    assert "sessions" in calls
+    assert "call_metrics" in calls
