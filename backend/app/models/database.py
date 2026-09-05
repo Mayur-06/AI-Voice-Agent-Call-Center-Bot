@@ -1,3 +1,4 @@
+import asyncio
 from supabase import create_client, Client
 from sqlalchemy import Column, String, Integer, Float, BigInteger, DateTime, Text, Boolean, ForeignKey
 from sqlalchemy import text as sa_text
@@ -9,16 +10,25 @@ from app.config import settings
 from app.database import Base
 
 
+_sync_client = create_client(settings.supabase_url, settings.supabase_anon_key)
+_sync_admin_client = create_client(settings.supabase_url, settings.supabase_service_role_key)
+
+
 def get_supabase() -> Client:
-    return create_client(settings.supabase_url, settings.supabase_anon_key)
+    return _sync_client
 
 
 def get_supabase_admin() -> Client:
-    return create_client(settings.supabase_url, settings.supabase_service_role_key)
+    return _sync_admin_client
 
 
 def get_storage_admin():
-    return get_supabase_admin().storage
+    return _sync_admin_client.storage
+
+
+async def run_supabase(query_builder):
+    """Run a synchronous Supabase query in a thread pool."""
+    return await asyncio.to_thread(query_builder)
 
 
 class Persona(Base):

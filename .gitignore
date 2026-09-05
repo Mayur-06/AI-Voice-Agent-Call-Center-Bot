@@ -8,6 +8,9 @@ env/
 venv/
 myvenv/
 .venv/
+*.egg-info/
+dist/
+build/
 
 # Environment variables
 .env
@@ -41,5 +44,13 @@ backend/recordings/
 # Node
 node_modules/
 
-#test
+# Database
+*.sqlite3
+*.db
+
+# Cache
+.mypy_cache/
+.ruff_cache/
+
+# Test
 backend/tests/

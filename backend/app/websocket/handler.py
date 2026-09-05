@@ -3,6 +3,7 @@ import logging
 import asyncio
 import time
 import uuid
+import math
 from contextlib import suppress
 from datetime import datetime, timezone
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
@@ -17,11 +18,12 @@ from app.services.call_summarizer import generate_call_summary
 from app.services.session import create_session, end_session, resolve_persona_id, _get_default_persona_id, save_turn
 from app.services.tts import get_persona_voice_id
 from app.config import settings
-from app.models.database import get_supabase
+from app.models.database import get_supabase, run_supabase
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 MAX_CONCURRENT_AUDIO_TASKS = settings.ws_max_concurrent_audio_tasks
+CHUNK_RMS_SILENCE_THRESHOLD = 120
 
 
 async def _log_stage(session_id: str, stage: str, level: str = "info", **extra) -> None:
@@ -32,9 +34,9 @@ async def _log_stage(session_id: str, stage: str, level: str = "info", **extra) 
 
 
 async def _load_session(session_id: str) -> dict | None:
-    supabase = get_supabase()
+    client = get_supabase()
     try:
-        res = supabase.table("sessions").select("*").eq("id", session_id).limit(1).execute()
+        res = await run_supabase(lambda: client.table("sessions").select("*").eq("id", session_id).limit(1).execute())
         if res.data:
             return res.data[0]
     except Exception:
@@ -50,16 +52,38 @@ def _is_duplicate_turn(conversation_mgr: ConversationManager, speaker: str, text
     return last.get("role") == speaker and last.get("content") == text
 
 
+def _chunk_rms(chunk: bytes) -> int:
+    if len(chunk) % 2 != 0:
+        return 0
+    samples = memoryview(chunk).cast("h")
+    if not samples:
+        return 0
+    sum_sq = 0
+    for s in samples:
+        sum_sq += s * s
+    return int(math.sqrt(sum_sq / len(samples)))
+
+
 async def _process_audio_chunk(
     session_id: str,
     chunk: bytes,
     vad: VADBuffer,
+    heartbeat_state: dict | None = None,
 ) -> tuple[bytes | None, bool]:
     await _log_stage(session_id, "AUDIO_RECEIVED", bytes=len(chunk), chunk_prefix=chunk[:8].hex())
     await manager.send_json(session_id, {"type": "status", "message": "upload_received"})
 
+    if heartbeat_state is not None:
+        heartbeat_state["consecutive_failures"] = 0
+
+    is_silent = await asyncio.to_thread(
+        lambda: len(chunk) >= 4 and _chunk_rms(chunk) < CHUNK_RMS_SILENCE_THRESHOLD
+    )
+    if is_silent:
+        return None, False
+
     try:
-        pcm_chunk = decode_to_pcm(chunk, sample_rate=settings.audio_sample_rate)
+        pcm_chunk = await asyncio.to_thread(decode_to_pcm, chunk, settings.audio_sample_rate)
     except Exception as exc:
         if chunk.startswith(b"RIFF") or chunk.startswith(b"WAVE"):
             await manager.send_json(session_id, {"type": "error", "message": f"decode_failed:{str(exc)}"})
@@ -69,7 +93,7 @@ async def _process_audio_chunk(
         await _log_stage(session_id, "AUDIO_ASSUMED_RAW_PCM", bytes=len(chunk))
 
     await manager.send_json(session_id, {"type": "status", "message": "decoded"})
-    vad_frame_ms = 30
+    vad_frame_ms = 32
     frame_size = int(settings.audio_sample_rate * 2 * (vad_frame_ms / 1000))
     await manager.send_json(session_id, {"type": "status", "message": "vading"})
 
@@ -79,7 +103,7 @@ async def _process_audio_chunk(
     audio_data = None
 
     try:
-        frame_audio, frame_speech_ended = vad.process_bytes(pcm_chunk, frame_size)
+        frame_audio, frame_speech_ended = await asyncio.to_thread(vad.process_bytes, pcm_chunk, frame_size)
         if frame_audio:
             await _append_log(
                 session_id,
@@ -87,6 +111,15 @@ async def _process_audio_chunk(
                     "ts": datetime.now(timezone.utc).isoformat(),
                     "level": "debug",
                     "msg": f"WS VAD session={session_id} speech_ended={frame_speech_ended} audio_len={len(frame_audio)}",
+                },
+            )
+        elif settings.vad_threshold is not None:
+            await _append_log(
+                session_id,
+                {
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                    "level": "debug",
+                    "msg": f"WS VAD session={session_id} speech_ended={frame_speech_ended} audio_len=0",
                 },
             )
         if frame_speech_ended and frame_audio:
@@ -137,7 +170,7 @@ async def _partial_stt_loop(
             continue
         state["partial_stt_in_progress"] = True
         try:
-            wav_audio = pcm_to_wav(recent_bytes, sample_rate=settings.audio_sample_rate)
+            wav_audio = await asyncio.to_thread(pcm_to_wav, recent_bytes, sample_rate=settings.audio_sample_rate)
             text = await asyncio.wait_for(transcribe_audio(wav_audio), timeout=10)
             if text and not is_noisy_transcription(text):
                 await manager.send_json(session_id, {"type": "partial_transcript", "role": "user", "text": text})
@@ -195,6 +228,7 @@ async def websocket_voice(websocket: WebSocket, session_id: str):
     receiver_task: asyncio.Task | None = None
     audio_tasks: set[asyncio.Task] = set()
     session_audio_bytes = AudioBuffer()
+    heartbeat_state: dict[str, int] = {"consecutive_failures": 0}
     heartbeat_task: asyncio.Task | None = None
     current_user_message_id: str | None = None
     recording_start_time: float | None = None
@@ -208,18 +242,66 @@ async def websocket_voice(websocket: WebSocket, session_id: str):
         _partial_stt_loop(session_id, vad, session_audio_bytes, partial_stt_stop, partial_stt_state)
     )
 
+    response_queue: asyncio.Queue[dict | None] = asyncio.Queue()
+
+    async def _response_worker():
+        while True:
+            try:
+                request = await response_queue.get()
+            except asyncio.CancelledError:
+                break
+            if request is None:
+                break
+            try:
+                if current_turn_task_ref.get("task") and not current_turn_task_ref["task"].done():
+                    if request.get("force"):
+                        current_turn_task_ref["task"].cancel()
+                        try:
+                            await current_turn_task_ref["task"]
+                        except asyncio.CancelledError:
+                            pass
+                        current_turn_task_ref["task"] = None
+                    else:
+                        continue
+                current_turn_task_ref["task"] = asyncio.create_task(
+                    start_turn_with_filler(
+                        session_id=request["session_id"],
+                        user_text=request["user_text"],
+                        conversation_mgr=request["conversation_mgr"],
+                        voice_id=request["voice_id"],
+                        persona_id=request["persona_id"],
+                        db_session_id=request["db_session_id"],
+                        stt_latency_ms=request.get("stt_latency_ms"),
+                        filler_threshold_ms=request.get("filler_threshold_ms", settings.filler_threshold_ms),
+                        user_message_id=request.get("user_message_id"),
+                    )
+                )
+
+                async def _safe_on_done(fut):
+                    try:
+                        await _on_turn_done(fut)
+                    except Exception:
+                        pass
+
+                current_turn_task_ref["task"].add_done_callback(lambda fut: asyncio.create_task(_safe_on_done(fut)))
+            except asyncio.CancelledError:
+                break
+            except Exception as exc:
+                await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "error", "msg": f"WS response worker error session={session_id} error={exc}"})
+
+    response_task = asyncio.create_task(_response_worker())
+
     async def _heartbeat():
-        consecutive_failures = 0
         max_failures = 5
         while True:
             await asyncio.sleep(settings.ws_heartbeat_interval_s)
             try:
                 await websocket.send_ping()
-                consecutive_failures = 0
+                heartbeat_state["consecutive_failures"] = 0
             except Exception:
-                consecutive_failures += 1
-                await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "warning", "msg": f"WS heartbeat failed session={session_id} failures={consecutive_failures}"})
-                if consecutive_failures >= max_failures:
+                heartbeat_state["consecutive_failures"] += 1
+                await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "warning", "msg": f"WS heartbeat failed session={session_id} failures={heartbeat_state['consecutive_failures']}"})
+                if heartbeat_state["consecutive_failures"] >= max_failures:
                     await message_queue.put(None)
                     break
 
@@ -269,7 +351,16 @@ async def websocket_voice(websocket: WebSocket, session_id: str):
             current_turn_task_ref["task"] = None
         filler_sent = False
 
-    def _on_turn_done(fut):
+    async def _cancel_pending_audio_tasks():
+        for task in list(audio_tasks):
+            if not task.done():
+                task.cancel()
+        for task in list(audio_tasks):
+            with suppress(asyncio.CancelledError):
+                await task
+        audio_tasks.clear()
+
+    async def _on_turn_done(fut):
         nonlocal current_user_message_id, recording_start_time
         try:
             result = fut.result()
@@ -281,89 +372,217 @@ async def websocket_voice(websocket: WebSocket, session_id: str):
             return
         if current_user_message_id and recording_start_time:
             end_ms = int((time.perf_counter() - recording_start_time) * 1000)
-            supabase = get_supabase()
             try:
-                supabase.table("messages").update({"recording_end_ms": end_ms}).eq("id", current_user_message_id).execute()
+                await run_supabase(
+                    lambda: get_supabase().table("messages").update({"recording_end_ms": end_ms}).eq("id", current_user_message_id).execute()
+                )
             except Exception:
                 pass
         recording_start_time = None
 
     async def _handle_audio_message(chunk: bytes):
         nonlocal filler_sent, current_user_message_id, recording_start_time
-        async with processing_lock:
-            session_audio_bytes.append(chunk)
-            audio_data, speech_started = await _process_audio_chunk(session_id, chunk, vad)
+        try:
+            async with processing_lock:
+                session_audio_bytes.append(chunk)
+                audio_data, speech_started = await _process_audio_chunk(session_id, chunk, vad, heartbeat_state)
 
-            if speech_started and current_turn_task_ref.get("task") and not current_turn_task_ref["task"].done():
-                await _cancel_current_turn()
-                await manager.send_json(session_id, {"type": "status", "message": "interrupted"})
+                if speech_started and current_turn_task_ref.get("task") and not current_turn_task_ref["task"].done():
+                    await _cancel_current_turn()
+                    await manager.send_json(session_id, {"type": "status", "message": "interrupted"})
+                    await _append_log(
+                        session_id,
+                        {"ts": datetime.now(timezone.utc).isoformat(), "level": "warning", "msg": f"WS interrupted by user session={session_id}"},
+                    )
+
+                if not audio_data:
+                    return
+
+                partial_stt_state["speech_started_time"] = 0.0
+
+                if current_turn_task_ref.get("task") and not current_turn_task_ref["task"].done():
+                    return
+
+                await manager.send_json(session_id, {"type": "status", "message": "processing"})
+                await manager.send_json(session_id, {"type": "status", "message": "transcribing"})
                 await _append_log(
-                    session_id,
-                    {"ts": datetime.now(timezone.utc).isoformat(), "level": "warning", "msg": f"WS interrupted by user session={session_id}"},
+                    session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "info", "msg": f"WS speech ended session={session_id} audio_len={len(audio_data)}"}
                 )
+                wav_audio = await asyncio.to_thread(pcm_to_wav, audio_data, sample_rate=settings.audio_sample_rate)
+                try:
+                    stt_start = time.perf_counter()
+                    user_text = await asyncio.wait_for(transcribe_audio(wav_audio), timeout=15)
+                    stt_latency_ms = int((time.perf_counter() - stt_start) * 1000)
+                except asyncio.TimeoutError:
+                    await manager.send_json(session_id, {"type": "error", "message": "stt_timeout"})
+                    await manager.send_json(session_id, {"type": "status", "message": "idle"})
+                    await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "error", "msg": f"WS STT timeout session={session_id}"})
+                    return
+                await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "info", "msg": f"WS STT session={session_id} text={user_text} latency_ms={stt_latency_ms}"})
+                await manager.send_json(session_id, {"type": "status", "message": "transcribed"})
+                if not user_text or is_noisy_transcription(user_text):
+                    await manager.send_json(session_id, {"type": "error", "message": "empty_transcript"})
+                    await manager.send_json(session_id, {"type": "status", "message": "idle"})
+                    await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "warning", "msg": f"WS empty transcript session={session_id}"})
+                    return
 
-            if not audio_data:
-                return
+                if _is_duplicate_turn(conversation_mgr, "user", user_text):
+                    await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "warning", "msg": f"WS duplicate transcript skipped session={session_id} text={user_text}"})
+                    return
 
-            partial_stt_state["speech_started_time"] = 0.0
+                await manager.send_json(session_id, {"type": "transcript", "role": "user", "text": user_text})
 
-            if current_turn_task_ref.get("task") and not current_turn_task_ref["task"].done():
-                return
-
-            await manager.send_json(session_id, {"type": "status", "message": "processing"})
-            await manager.send_json(session_id, {"type": "status", "message": "transcribing"})
-            await _append_log(
-                session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "info", "msg": f"WS speech ended session={session_id} audio_len={len(audio_data)}"}
-            )
-            wav_audio = pcm_to_wav(audio_data, sample_rate=settings.audio_sample_rate)
-            try:
-                stt_start = time.perf_counter()
-                user_text = await asyncio.wait_for(transcribe_audio(wav_audio), timeout=15)
-                stt_latency_ms = int((time.perf_counter() - stt_start) * 1000)
-            except asyncio.TimeoutError:
-                await manager.send_json(session_id, {"type": "error", "message": "stt_timeout"})
-                await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "error", "msg": f"WS STT timeout session={session_id}"})
-                return
-            await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "info", "msg": f"WS STT session={session_id} text={user_text} latency_ms={stt_latency_ms}"})
-            await manager.send_json(session_id, {"type": "status", "message": "transcribed"})
-            if not user_text or is_noisy_transcription(user_text):
-                await manager.send_json(session_id, {"type": "error", "message": "empty_transcript"})
-                await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "warning", "msg": f"WS empty transcript session={session_id}"})
-                return
-
-            if _is_duplicate_turn(conversation_mgr, "user", user_text):
-                await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "warning", "msg": f"WS duplicate transcript skipped session={session_id} text={user_text}"})
-                return
-
-            await manager.send_json(session_id, {"type": "transcript", "role": "user", "text": user_text})
-
-            filler_sent = False
-            if recording_start_time is None:
-                recording_start_time = time.perf_counter()
-            user_recording_start_ms = int((time.perf_counter() - recording_start_time) * 1000)
-            current_user_message_id = await save_turn(
-                db_session_id,
-                "user",
-                user_text,
-                latency_ms=0,
-                stt_latency_ms=stt_latency_ms,
-                recording_start_ms=user_recording_start_ms,
-            )
-
-            current_turn_task_ref["task"] = asyncio.create_task(
-                start_turn_with_filler(
-                    session_id,
-                    user_text,
-                    conversation_mgr,
-                    voice_id,
-                    persona_id,
+                filler_sent = False
+                if recording_start_time is None:
+                    recording_start_time = time.perf_counter()
+                user_recording_start_ms = int((time.perf_counter() - recording_start_time) * 1000)
+                current_user_message_id = await save_turn(
                     db_session_id,
+                    "user",
+                    user_text,
+                    latency_ms=0,
                     stt_latency_ms=stt_latency_ms,
-                    filler_threshold_ms=settings.filler_threshold_ms,
-                    user_message_id=current_user_message_id,
+                    recording_start_ms=user_recording_start_ms,
                 )
-            )
-            current_turn_task_ref["task"].add_done_callback(_on_turn_done)
+
+                await response_queue.put({
+                    "session_id": session_id,
+                    "user_text": user_text,
+                    "conversation_mgr": conversation_mgr,
+                    "voice_id": voice_id,
+                    "persona_id": persona_id,
+                    "db_session_id": db_session_id,
+                    "stt_latency_ms": stt_latency_ms,
+                    "filler_threshold_ms": settings.filler_threshold_ms,
+                    "user_message_id": current_user_message_id,
+                    "force": False,
+                })
+        except Exception as exc:
+            await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "error", "msg": f"WS audio task error session={session_id} error={exc}"})
+
+    async def _handle_control_message(data: dict):
+        nonlocal filler_sent, current_user_message_id, recording_start_time, persona_id, voice_id
+        try:
+            msg_type = data.get("type")
+            if msg_type == "auth":
+                persona_id = await resolve_persona_id(data.get("persona_id", persona_id))
+                voice_id = data.get("voice_id") or voice_id
+                await manager.send_json(session_id, {"type": "status", "message": "authenticated"})
+                await _append_log(
+                    session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "info", "msg": f"WS authenticated session={session_id} persona={persona_id} voice={voice_id} db_session={db_session_id}"}
+                )
+
+            elif msg_type == "voice_select":
+                voice_id = data.get("voice_id") or voice_id
+                await manager.send_json(session_id, {"type": "status", "message": f"voice_selected:{voice_id}"})
+                await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "info", "msg": f"WS voice selected session={session_id} voice={voice_id}"})
+                try:
+                    await run_supabase(
+                        lambda: get_supabase().table("sessions").update({"selected_voice": voice_id}).eq("id", db_session_id).execute()
+                    )
+                except Exception:
+                    pass
+
+            elif msg_type == "stop_playback":
+                await _cancel_current_turn()
+                await manager.send_json(session_id, {"type": "status", "message": "playback_stopped"})
+                await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "info", "msg": f"WS playback stopped session={session_id}"})
+
+            elif msg_type == "stop_listening":
+                await _cancel_pending_audio_tasks()
+                await manager.send_json(session_id, {"type": "status", "message": "processing"})
+                await manager.send_json(session_id, {"type": "status", "message": "transcribing"})
+                async with processing_lock:
+                    audio_data = await asyncio.to_thread(vad.flush)
+                if not audio_data:
+                    fallback_bytes = session_audio_bytes.get_recent_bytes(settings.audio_sample_rate * 2 * 3)
+                    if len(fallback_bytes) >= settings.audio_sample_rate * 2 * 1:
+                        audio_data = fallback_bytes
+                        await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "warning", "msg": f"WS VAD fallback session={session_id} audio_len={len(audio_data)}"})
+                    else:
+                        await manager.send_json(session_id, {"type": "status", "message": "idle"})
+                        await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "warning", "msg": f"WS flush empty session={session_id}"})
+                        session_audio_bytes.clear()
+                        return
+                session_audio_bytes.clear()
+                await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "info", "msg": f"WS flush session={session_id} audio_len={len(audio_data)}"})
+                wav_audio = await asyncio.to_thread(pcm_to_wav, audio_data, sample_rate=settings.audio_sample_rate)
+                try:
+                    stt_start = time.perf_counter()
+                    user_text = await asyncio.wait_for(transcribe_audio(wav_audio), timeout=15)
+                    stt_latency_ms = int((time.perf_counter() - stt_start) * 1000)
+                except asyncio.TimeoutError:
+                    await manager.send_json(session_id, {"type": "error", "message": "stt_timeout"})
+                    await manager.send_json(session_id, {"type": "status", "message": "idle"})
+                    await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "error", "msg": f"WS STT timeout session={session_id}"})
+                    return
+                await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "info", "msg": f"WS STT session={session_id} text={user_text} latency_ms={stt_latency_ms}"})
+                await manager.send_json(session_id, {"type": "status", "message": "transcribed"})
+                if not user_text or is_noisy_transcription(user_text):
+                    await manager.send_json(session_id, {"type": "error", "message": "empty_transcript"})
+                    await manager.send_json(session_id, {"type": "status", "message": "idle"})
+                    await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "warning", "msg": f"WS empty transcript session={session_id}"})
+                    return
+                await manager.send_json(session_id, {"type": "transcript", "role": "user", "text": user_text})
+                if recording_start_time is None:
+                    recording_start_time = time.perf_counter()
+                user_recording_start_ms = int((time.perf_counter() - recording_start_time) * 1000)
+                current_user_message_id = await save_turn(
+                    db_session_id,
+                    "user",
+                    user_text,
+                    latency_ms=0,
+                    stt_latency_ms=stt_latency_ms,
+                    recording_start_ms=user_recording_start_ms,
+                )
+                await response_queue.put({
+                    "session_id": session_id,
+                    "user_text": user_text,
+                    "conversation_mgr": conversation_mgr,
+                    "voice_id": voice_id,
+                    "persona_id": persona_id,
+                    "db_session_id": db_session_id,
+                    "stt_latency_ms": stt_latency_ms,
+                    "filler_threshold_ms": settings.filler_threshold_ms,
+                    "user_message_id": current_user_message_id,
+                    "force": True,
+                })
+
+            elif msg_type == "transcript":
+                if data.get("role") != "user":
+                    return
+                user_text = data.get("text", "")
+                if not user_text:
+                    return
+                if _is_duplicate_turn(conversation_mgr, "user", user_text):
+                    await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "warning", "msg": f"WS duplicate transcript skipped session={session_id} text={user_text}"})
+                    return
+                await _cancel_current_turn()
+                await manager.send_json(session_id, {"type": "transcript", "role": "user", "text": user_text})
+                if recording_start_time is None:
+                    recording_start_time = time.perf_counter()
+                user_recording_start_ms = int((time.perf_counter() - recording_start_time) * 1000)
+                current_user_message_id = await save_turn(
+                    db_session_id,
+                    "user",
+                    user_text,
+                    latency_ms=0,
+                    recording_start_ms=user_recording_start_ms,
+                )
+                await response_queue.put({
+                    "session_id": session_id,
+                    "user_text": user_text,
+                    "conversation_mgr": conversation_mgr,
+                    "voice_id": voice_id,
+                    "persona_id": persona_id,
+                    "db_session_id": db_session_id,
+                    "stt_latency_ms": None,
+                    "filler_threshold_ms": settings.filler_threshold_ms,
+                    "user_message_id": current_user_message_id,
+                    "force": True,
+                })
+        except Exception as exc:
+            await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "error", "msg": f"WS control task error session={session_id} error={exc}"})
 
     try:
         await manager.send_json(session_id, {"type": "status", "message": "connected"})
@@ -376,9 +595,6 @@ async def websocket_voice(websocket: WebSocket, session_id: str):
             message = await message_queue.get()
             if message is None:
                 break
-            await _append_log(
-                session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "debug", "msg": f"WS receive session={session_id} message_keys={list(message.keys())}"}
-            )
 
             if "bytes" in message:
                 try:
@@ -388,35 +604,22 @@ async def websocket_voice(websocket: WebSocket, session_id: str):
                     task = asyncio.create_task(_handle_audio_message(message["bytes"]))
                     audio_tasks.add(task)
                     task.add_done_callback(audio_tasks.discard)
-                    await asyncio.sleep(0)
                 except Exception as exc:
-                    await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "error", "msg": f"WS audio processing error session={session_id} error={exc}"})
+                    await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "error", "msg": f"WS audio dispatch error session={session_id} error={exc}"})
 
             elif "text" in message:
                 try:
                     data = json.loads(message["text"])
                     msg_type = data.get("type")
-                    await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "info", "msg": f"WS text message session={session_id} type={msg_type}"})
 
-                    if msg_type == "auth":
-                        persona_id = await resolve_persona_id(data.get("persona_id", persona_id))
-                        voice_id = data.get("voice_id") or voice_id
-                        await manager.send_json(session_id, {"type": "status", "message": "authenticated"})
-                        await _append_log(
-                            session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "info", "msg": f"WS authenticated session={session_id} persona={persona_id} voice={voice_id} db_session={db_session_id}"}
-                        )
-
-                    elif msg_type == "voice_select":
-                        voice_id = data.get("voice_id") or voice_id
-                        await manager.send_json(session_id, {"type": "status", "message": f"voice_selected:{voice_id}"})
-                        await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "info", "msg": f"WS voice selected session={session_id} voice={voice_id}"})
+                    if msg_type == "ping":
                         try:
-                            supabase = get_supabase()
-                            supabase.table("sessions").update({"selected_voice": voice_id}).eq("id", db_session_id).execute()
+                            await websocket.send_text(json.dumps({"type": "pong"}))
                         except Exception:
-                            pass
+                            await message_queue.put(None)
+                        continue
 
-                    elif msg_type == "stop_call":
+                    if msg_type == "stop_call":
                         await _cancel_current_turn()
                         await manager.send_json(session_id, {"type": "status", "message": "call_ended"})
                         await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "info", "msg": f"WS call ended session={session_id}"})
@@ -424,124 +627,14 @@ async def websocket_voice(websocket: WebSocket, session_id: str):
                             await websocket.close()
                         except Exception:
                             pass
+                        await message_queue.put(None)
                         break
 
-                    elif msg_type == "stop_playback":
-                        await _cancel_current_turn()
-                        await manager.send_json(session_id, {"type": "status", "message": "playback_stopped"})
-                        await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "info", "msg": f"WS playback stopped session={session_id}"})
-
-                    elif msg_type == "stop_listening":
-                        await manager.send_json(session_id, {"type": "status", "message": "processing"})
-                        await manager.send_json(session_id, {"type": "status", "message": "transcribing"})
-                        audio_data = vad.flush()
-                        if not audio_data:
-                            await manager.send_json(session_id, {"type": "status", "message": "idle"})
-                            continue
-                        await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "info", "msg": f"WS flush session={session_id} audio_len={len(audio_data)}"})
-                        wav_audio = pcm_to_wav(audio_data, sample_rate=settings.audio_sample_rate)
-                        try:
-                            stt_start = time.perf_counter()
-                            user_text = await asyncio.wait_for(transcribe_audio(wav_audio), timeout=15)
-                            stt_latency_ms = int((time.perf_counter() - stt_start) * 1000)
-                        except asyncio.TimeoutError:
-                            await manager.send_json(session_id, {"type": "error", "message": "stt_timeout"})
-                            await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "error", "msg": f"WS STT timeout session={session_id}"})
-                            continue
-                        await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "info", "msg": f"WS STT session={session_id} text={user_text} latency_ms={stt_latency_ms}"})
-                        await manager.send_json(session_id, {"type": "status", "message": "transcribed"})
-                        if not user_text or is_noisy_transcription(user_text):
-                            await manager.send_json(session_id, {"type": "error", "message": "empty_transcript"})
-                            await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "warning", "msg": f"WS empty transcript session={session_id}"})
-                            continue
-                        await manager.send_json(session_id, {"type": "transcript", "role": "user", "text": user_text})
-                        if recording_start_time is None:
-                            recording_start_time = time.perf_counter()
-                            user_recording_start_ms = int((time.perf_counter() - recording_start_time) * 1000)
-                            current_user_message_id = await save_turn(
-                                db_session_id,
-                                "user",
-                                user_text,
-                                latency_ms=0,
-                                stt_latency_ms=stt_latency_ms,
-                                recording_start_ms=user_recording_start_ms,
-                            )
-                            current_turn_task_ref["task"] = asyncio.create_task(
-                                start_turn_with_filler(
-                                    session_id,
-                                    user_text,
-                                    conversation_mgr,
-                                    voice_id,
-                                    persona_id,
-                                    db_session_id,
-                                    stt_latency_ms=stt_latency_ms,
-                                    filler_threshold_ms=settings.filler_threshold_ms,
-                                    user_message_id=current_user_message_id,
-                                )
-                            )
-                            current_turn_task_ref["task"].add_done_callback(_on_turn_done)
-                        try:
-                            await asyncio.wait_for(current_turn_task_ref["task"], timeout=60)
-                        except asyncio.TimeoutError:
-                            await manager.send_json(session_id, {"type": "error", "message": "llm_timeout"})
-                            await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "error", "msg": f"WS LLM timeout session={session_id}"})
-                        except asyncio.CancelledError:
-                            pass
-                        except Exception as exc:
-                            await manager.send_json(session_id, {"type": "error", "message": f"turn_failed:{type(exc).__name__}"})
-                            await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "error", "msg": f"WS turn failed session={session_id} error={exc}"})
-
-                    elif msg_type == "transcript":
-                        user_text = data.get("text", "")
-                        if not user_text:
-                            continue
-                        if _is_duplicate_turn(conversation_mgr, "user", user_text):
-                            await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "warning", "msg": f"WS duplicate transcript skipped session={session_id} text={user_text}"})
-                            continue
-                        await _cancel_current_turn()
-                        await manager.send_json(session_id, {"type": "transcript", "role": "user", "text": user_text})
-                        if recording_start_time is None:
-                            recording_start_time = time.perf_counter()
-                            user_recording_start_ms = int((time.perf_counter() - recording_start_time) * 1000)
-                            current_user_message_id = await save_turn(
-                                db_session_id,
-                                "user",
-                                user_text,
-                                latency_ms=0,
-                                recording_start_ms=user_recording_start_ms,
-                            )
-                            current_turn_task_ref["task"] = asyncio.create_task(
-                                start_turn_with_filler(
-                                    session_id,
-                                    user_text,
-                                    conversation_mgr,
-                                    voice_id,
-                                    persona_id,
-                                    db_session_id,
-                                    stt_latency_ms=None,
-                                    filler_threshold_ms=settings.filler_threshold_ms,
-                                    user_message_id=current_user_message_id,
-                                )
-                            )
-                            current_turn_task_ref["task"].add_done_callback(_on_turn_done)
-                        try:
-                            await asyncio.wait_for(current_turn_task_ref["task"], timeout=60)
-                        except asyncio.TimeoutError:
-                            await manager.send_json(session_id, {"type": "error", "message": "llm_timeout"})
-                            await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "error", "msg": f"WS LLM timeout session={session_id}"})
-                        except asyncio.CancelledError:
-                            pass
-                        except Exception as exc:
-                            await manager.send_json(session_id, {"type": "error", "message": f"turn_failed:{type(exc).__name__}"})
-                            await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "error", "msg": f"WS turn failed session={session_id} error={exc}"})
-
-                    elif msg_type == "ping":
-                        try:
-                            await websocket.send_text(json.dumps({"type": "pong"}))
-                        except Exception:
-                            break
+                    task = asyncio.create_task(_handle_control_message(data))
                 except Exception as exc:
-                    await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "error", "msg": f"WS text processing error session={session_id} error={exc}"})
+                    await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "error", "msg": f"WS text dispatch error session={session_id} error={exc}"})
+
+            await asyncio.sleep(0)
 
     except WebSocketDisconnect:
         pass
@@ -563,6 +656,11 @@ async def websocket_voice(websocket: WebSocket, session_id: str):
                 pass
         await _cancel_current_turn()
 
+        if response_task:
+            response_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await response_task
+
         partial_stt_stop.set()
         with suppress(asyncio.CancelledError):
             await partial_stt_task
@@ -572,7 +670,7 @@ async def websocket_voice(websocket: WebSocket, session_id: str):
             user_pcm = session_audio_bytes.get_bytes()
             ai_segments = manager.get_ai_segments(session_id)
             if user_pcm or ai_segments:
-                composed = compose_call_recording(user_pcm, ai_segments, sample_rate=settings.audio_sample_rate)
+                composed = await asyncio.to_thread(compose_call_recording, user_pcm, ai_segments, sample_rate=settings.audio_sample_rate)
                 if composed:
                     recording_url = await save_session_recording(db_session_id, composed)
         except Exception:
@@ -586,7 +684,9 @@ async def websocket_voice(websocket: WebSocket, session_id: str):
                 pass
 
         await end_session(db_session_id, recording_url=recording_url, summary=summary or None)
-        manager.disconnect(session_id)
+        current_ws = manager.active_connections.get(session_id)
+        if current_ws is None or current_ws is websocket:
+            manager.disconnect(session_id)
         await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "info", "msg": f"WS disconnected session={session_id} target_session={db_session_id}"})
         from app.services.call_session_logger import close_session
         await close_session(session_id)

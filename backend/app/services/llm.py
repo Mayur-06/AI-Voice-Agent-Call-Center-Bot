@@ -3,7 +3,7 @@ from typing import Optional
 from google import genai
 from google.genai import types
 from app.config import settings
-from app.models.database import get_supabase
+from app.models.database import get_supabase, run_supabase
 
 _client = genai.Client(api_key=settings.google_api_key)
 
@@ -25,9 +25,9 @@ def _build_context_prompt(system_prompt: str, context_chunks: list[tuple[str, st
 
 
 async def get_persona_system_prompt(persona_id: str) -> str:
-    supabase = get_supabase()
+    client = get_supabase()
     try:
-        res = supabase.table("personas").select("system_prompt").eq("id", persona_id).limit(1).execute()
+        res = await run_supabase(lambda: client.table("personas").select("system_prompt").eq("id", persona_id).limit(1).execute())
         if res.data:
             return res.data[0]["system_prompt"]
     except Exception:
@@ -45,7 +45,7 @@ async def generate_response(messages: list[dict[str, str]], system_prompt: str, 
         role = "user" if msg["role"] == "user" else "model"
         contents.append(types.Content(role=role, parts=[types.Part(text=msg["content"])]))
 
-    response = _client.models.generate_content(
+    response = await _client.aio.models.generate_content(
         model=settings.gemini_model,
         contents=contents,
         config=types.GenerateContentConfig(system_instruction=final_system_prompt),
@@ -63,7 +63,7 @@ async def generate_response_stream(messages: list[dict[str, str]], system_prompt
         role = "user" if msg["role"] == "user" else "model"
         contents.append(types.Content(role=role, parts=[types.Part(text=msg["content"])]))
 
-    for chunk in _client.models.generate_content_stream(
+    async for chunk in _client.aio.models.generate_content_stream(
         model=settings.gemini_model,
         contents=contents,
         config=types.GenerateContentConfig(system_instruction=final_system_prompt),

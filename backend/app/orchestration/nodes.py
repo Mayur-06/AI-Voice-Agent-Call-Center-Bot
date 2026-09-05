@@ -1,9 +1,9 @@
+import asyncio
 import json
 import re
 from google import genai
 from google.genai import types
 from app.config import settings
-
 
 _client = genai.Client(api_key=settings.google_api_key)
 
@@ -238,10 +238,7 @@ async def voice_router_node(state: dict) -> dict:
         return {**state, "persona_id": "default"}
 
 
-async def extract_node(state: dict) -> dict:
-    file_bytes = state.get("file_bytes", b"")
-    filename = state.get("filename", "")
-
+def _extract_text_sync(file_bytes: bytes, filename: str) -> tuple[str, str | None]:
     if filename.lower().endswith(".pdf"):
         try:
             from PyPDF2 import PdfReader
@@ -249,16 +246,24 @@ async def extract_node(state: dict) -> dict:
             reader = PdfReader(io.BytesIO(file_bytes))
             text = "\n".join(page.extract_text() or "" for page in reader.pages)
             if not text.strip():
-                return {**state, "text": "", "error": "Empty PDF text", "status": "error"}
-            return {**state, "text": text, "error": None, "status": "extracted"}
+                return "", "Empty PDF text"
+            return text, None
         except Exception as exc:
-            return {**state, "text": "", "error": f"Failed to extract text from PDF: {exc}", "status": "error"}
+            return "", f"Failed to extract text from PDF: {exc}"
     else:
         try:
-            text = file_bytes.decode("utf-8")
-            return {**state, "text": text, "error": None, "status": "extracted"}
+            return file_bytes.decode("utf-8"), None
         except Exception as exc:
-            return {**state, "text": "", "error": f"Failed to decode file: {exc}", "status": "error"}
+            return "", f"Failed to decode file: {exc}"
+
+
+async def extract_node(state: dict) -> dict:
+    file_bytes = state.get("file_bytes", b"")
+    filename = state.get("filename", "")
+    text, error = await asyncio.to_thread(_extract_text_sync, file_bytes, filename)
+    if error:
+        return {**state, "text": "", "error": error, "status": "error"}
+    return {**state, "text": text, "error": None, "status": "extracted"}
 
 
 async def chunk_node(state: dict) -> dict:
@@ -289,8 +294,8 @@ async def embed_node(state: dict) -> dict:
     try:
         from app.services.rag import _get_model
         model = _get_model()
-        embeddings = model.encode(chunks, show_progress_bar=False).tolist()
-        return {**state, "embeddings": embeddings, "status": "embedded"}
+        embeddings = await asyncio.to_thread(model.encode, chunks, {"show_progress_bar": False})
+        return {**state, "embeddings": embeddings.tolist(), "status": "embedded"}
     except Exception as exc:
         return {**state, "embeddings": [], "error": f"Embedding failed: {exc}", "status": "error"}
 
@@ -305,7 +310,7 @@ async def index_node(state: dict) -> dict:
 
     try:
         from app.services.rag import store_chunks_in_pinecone
-        store_chunks_in_pinecone(document_id, None, chunks, embeddings)
+        await store_chunks_in_pinecone(document_id, None, chunks, embeddings)
         return {**state, "status": "indexed"}
     except Exception as exc:
         return {**state, "error": f"Indexing failed: {exc}", "status": "error"}

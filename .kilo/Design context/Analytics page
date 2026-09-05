@@ -1,0 +1,735 @@
+<!DOCTYPE html><html lang="en" style=""><head>
+<meta charset="utf-8">
+<meta content="width=device-width, initial-scale=1.0" name="viewport">
+<title>Aura Voice Studio — Analytics &amp; Performance</title>
+<!-- Montserrat Font -->
+<link href="https://fonts.googleapis.com" rel="preconnect">
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect">
+<link href="https://fonts.googleapis.com/css2?family=Montserrat:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&amp;display=swap" rel="stylesheet">
+<!-- Material Symbols Outlined -->
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet">
+<!-- Tailwind CSS CDN -->
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<script id="tailwind-config">
+    tailwind.config = {
+      darkMode: "class",
+      theme: {
+        extend: {
+          colors: {
+            "surface-container": "#eeedef",
+            "primary": "#03191e",
+            "outline-variant": "#c2c7c9",
+            "on-tertiary-fixed": "#002022",
+            "on-primary-fixed-variant": "#354a50",
+            "surface-container-low": "#f4f3f5",
+            "primary-fixed": "#cfe6ed",
+            "surface-variant": "#e3e2e4",
+            "primary-container": "#03191e",
+            "secondary": "#655e45",
+            "surface-container-lowest": "#ffffff",
+            "secondary-container": "#ebe1c1",
+            "on-secondary-container": "#4d472f",
+            "outline": "#72787a",
+            "tertiary-container": "#002022",
+            "background": "#fbfbff",
+            "surface-container-high": "#e8e8ea",
+            "inverse-primary": "#b4cad1",
+            "on-tertiary": "#ffffff",
+            "on-background": "#03191e",
+            "surface-tint": "#4c6268",
+            "error": "#992828",
+            "on-secondary-fixed": "#201b08",
+            "surface-dim": "#dadadc",
+            "on-primary-container": "#fbfbff",
+            "tertiary-fixed": "#b2edf2",
+            "secondary-fixed-dim": "#d0c6a7",
+            "on-surface": "#03191e",
+            "surface-container-highest": "#e3e2e4",
+            "tertiary-fixed-dim": "#96d0d6",
+            "on-tertiary-fixed-variant": "#084f54",
+            "on-secondary-fixed-variant": "#4d472f",
+            "primary-fixed-dim": "#b4cad1",
+            "on-error": "#ffffff",
+            "on-tertiary-container": "#538d92",
+            "surface-bright": "#fbfbff",
+            "surface": "#fbfbff",
+            "on-surface-variant": "#424849",
+            "error-container": "#ffdad6",
+            "on-secondary": "#ffffff",
+            "on-error-container": "#93000a",
+            "tertiary": "#03191e",
+            "inverse-on-surface": "#f1f0f2",
+            "secondary-fixed": "#ece2c2",
+            "inverse-surface": "#2f3032",
+            "on-primary": "#ffffff",
+            "on-primary-fixed": "#03191e",
+            /* Strict Brand Custom Tokens */
+            "ink-black": "#03191e",
+            "ghost-white": "#fbfbff",
+            "pearl-beige": "#ebe1c1",
+            "studio-teal": "#0f5257"
+          },
+          borderRadius: {
+            "DEFAULT": "0.25rem",
+            "lg": "0.5rem",
+            "xl": "0.75rem",
+            "2xl": "1rem",
+            "full": "9999px"
+          },
+          spacing: {
+            "col-width-right": "24rem",
+            "space-3xl": "4rem",
+            "space-xs": "0.25rem",
+            "space-base": "1rem",
+            "space-2xl": "3rem",
+            "space-xl": "2rem",
+            "space-lg": "1.5rem",
+            "layout-margin": "1.5rem",
+            "col-width-left": "20rem",
+            "layout-gutter": "1rem",
+            "space-md": "0.75rem",
+            "space-2xs": "0.125rem",
+            "space-sm": "0.5rem"
+          },
+          fontFamily: {
+            "body-md": ["Montserrat", "sans-serif"],
+            "body-lg": ["Montserrat", "sans-serif"],
+            "display-lg": ["Montserrat", "sans-serif"],
+            "body-sm": ["Montserrat", "sans-serif"],
+            "telemetry-md": ["Montserrat", "sans-serif"],
+            "headline-sm": ["Montserrat", "sans-serif"],
+            "telemetry-sm": ["Montserrat", "sans-serif"],
+            "display-sm": ["Montserrat", "sans-serif"],
+            "label-sm": ["Montserrat", "sans-serif"],
+            "headline-lg": ["Montserrat", "sans-serif"],
+            "label-md": ["Montserrat", "sans-serif"],
+            "headline-md": ["Montserrat", "sans-serif"]
+          },
+          fontSize: {
+            "body-md": ["14px", { "lineHeight": "22px", "letterSpacing": "0em", "fontWeight": "400" }],
+            "body-lg": ["16px", { "lineHeight": "26px", "letterSpacing": "-0.01em", "fontWeight": "400" }],
+            "display-lg": ["44px", { "lineHeight": "52px", "letterSpacing": "-0.03em", "fontWeight": "600" }],
+            "body-sm": ["12px", { "lineHeight": "18px", "letterSpacing": "0.005em", "fontWeight": "400" }],
+            "telemetry-md": ["12px", { "lineHeight": "16px", "letterSpacing": "-0.01em", "fontWeight": "500" }],
+            "headline-sm": ["16px", { "lineHeight": "24px", "letterSpacing": "-0.01em", "fontWeight": "600" }],
+            "telemetry-sm": ["10px", { "lineHeight": "14px", "letterSpacing": "0em", "fontWeight": "400" }],
+            "display-sm": ["32px", { "lineHeight": "40px", "letterSpacing": "-0.025em", "fontWeight": "600" }],
+            "label-sm": ["10px", { "lineHeight": "14px", "letterSpacing": "0.04em", "fontWeight": "600" }],
+            "headline-lg": ["24px", { "lineHeight": "32px", "letterSpacing": "-0.02em", "fontWeight": "600" }],
+            "label-md": ["12px", { "lineHeight": "16px", "letterSpacing": "0.02em", "fontWeight": "500" }],
+            "headline-md": ["20px", { "lineHeight": "28px", "letterSpacing": "-0.015em", "fontWeight": "500" }]
+          }
+        }
+      }
+    }
+  </script>
+<style>
+    * {
+      font-family: 'Montserrat', sans-serif !important;
+    }
+    .material-symbols-outlined {
+      font-family: 'Material Symbols Outlined' !important;
+      font-weight: normal;
+      font-style: normal;
+      font-size: 20px;
+      line-height: 1;
+      display: inline-block;
+      text-transform: none;
+      letter-spacing: normal;
+      word-wrap: normal;
+      white-space: nowrap;
+      direction: ltr;
+      -webkit-font-smoothing: antialiased;
+      text-rendering: optimizeLegibility;
+      font-feature-settings: 'liga';
+    }
+    /* Chart and micro-interaction styling */
+    .chart-grid-line {
+      stroke: rgba(3, 25, 30, 0.06);
+      stroke-dasharray: 3 3;
+    }
+    .chart-trend-area {
+      fill: url(#areaGradient);
+    }
+    .chart-trend-path {
+      fill: none;
+      stroke: #03191e;
+      stroke-width: 2.25;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+    .chart-hover-indicator {
+      transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+  </style>
+</head>
+<body class="bg-[#fbfbff] text-[#03191e] min-h-screen flex flex-col antialiased selection:bg-[#ebe1c1] selection:text-[#03191e]">
+<!-- Top Navigation Bar (matching shared component layout & Voice Call dark navbar token) -->
+<header class="bg-[#03191e] text-[#fbfbff] sticky top-0 z-40 w-full px-6 h-16 flex items-center justify-between border-b border-[#03191e]/20 transition-all">
+<div class="flex items-center gap-6">
+<!-- Back / Session Trigger -->
+<a class="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[#fbfbff]/10 hover:bg-[#fbfbff]/20 text-[#fbfbff] transition-all text-xs font-medium tracking-tight" href="#"><span class="material-symbols-outlined text-[18px]">arrow_back</span><span class="font-label-md text-label-md font-medium">New Session</span></a>
+<div class="h-5 w-[1px] bg-[#fbfbff]/15 hidden sm:block"></div>
+<!-- Header Title & Subtitle Badge -->
+<div class="flex items-baseline gap-3">
+<h1 class="font-headline-sm text-headline-sm font-semibold tracking-tight text-[#fbfbff]">
+          Analytics &amp; Performance
+        </h1>
+<div class="hidden md:flex items-center gap-2 px-2.5 py-0.5 rounded-full bg-[#ebe1c1]/15 text-[#ebe1c1] border border-[#ebe1c1]/20 font-telemetry-sm text-telemetry-sm">
+<span class="w-1.5 h-1.5 rounded-full bg-[#126e51] animate-pulse"></span>
+
+</div>
+</div>
+</div>
+<!-- Right Quick Actions -->
+
+</header>
+<!-- Sub-bar Breadcrumb / Live Filter Strip -->
+
+<!-- Main Container Stage -->
+<main class="flex-1 w-full max-w-[1600px] mx-auto p-6 space-y-6">
+<!-- 1. Top Stat Cards (Row of 4 key metrics) -->
+<section class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+<!-- Stat 1: Total Calls -->
+<div class="relative rounded-xl p-5 border border-[#03191e]/10 shadow-[0_2px_8px_-2px_rgba(3,25,30,0.04)] hover:border-[#03191e]/20 transition-all flex flex-col justify-between bg-[#ebe1c1]">
+<div class="flex items-start justify-between mb-2">
+<div>
+<span class="text-xs font-semibold uppercase tracking-wider text-[#03191e]/50 font-label-sm">Total Sessions</span>
+<div class="font-display-sm text-display-sm text-[#03191e] mt-1 font-bold">1,428</div>
+</div>
+<div class="p-2 rounded-lg bg-[#ebe1c1]/40 text-[#03191e]">
+<span class="material-symbols-outlined text-[20px]">phone_in_talk</span>
+</div>
+</div>
+<div class="flex items-center justify-between pt-3 border-t border-[#03191e]/5">
+<span class="inline-flex items-center text-[11px] font-semibold text-[#126e51] bg-[#126e51]/10 px-2 py-0.5 rounded-full">
+<span class="material-symbols-outlined text-[14px] mr-0.5">trending_up</span> +14.2% vs last mo
+          </span>
+<span class="text-[11px] text-[#03191e]/50 font-medium">99.4% completion</span>
+</div>
+</div>
+<!-- Stat 2: Avg Duration -->
+<div class="relative rounded-xl p-5 border border-[#03191e]/10 shadow-[0_2px_8px_-2px_rgba(3,25,30,0.04)] hover:border-[#03191e]/20 transition-all flex flex-col justify-between bg-[#ebe1c1]">
+<div class="flex items-start justify-between mb-2">
+<div>
+<span class="text-xs font-semibold uppercase tracking-wider text-[#03191e]/50 font-label-sm">Avg Duration</span>
+<div class="font-display-sm text-display-sm text-[#03191e] mt-1 font-bold">14m 32s</div>
+</div>
+<div class="p-2 rounded-lg bg-[#03191e]/5 text-[#03191e]">
+<span class="material-symbols-outlined text-[20px]">timer</span>
+</div>
+</div>
+<div class="flex items-center justify-between pt-3 border-t border-[#03191e]/5">
+<span class="inline-flex items-center text-[11px] font-semibold text-[#126e51] bg-[#126e51]/10 px-2 py-0.5 rounded-full">
+<span class="material-symbols-outlined text-[14px] mr-0.5">arrow_downward</span> -1m 05s optimal
+          </span>
+<span class="text-[11px] text-[#03191e]/50 font-medium">Efficiency 92.8%</span>
+</div>
+</div>
+<!-- Stat 3: Avg Sentiment (Warm Highlighted Pearl Beige Card) -->
+<div class="relative rounded-xl p-5 border border-[#03191e]/12 shadow-[0_2px_8px_-2px_rgba(3,25,30,0.05)] hover:border-[#03191e]/25 transition-all flex flex-col justify-between bg-[#ebe1c1]">
+<div class="flex items-start justify-between mb-2">
+<div>
+<span class="text-xs font-semibold uppercase tracking-wider text-[#03191e]/70 font-label-sm">Avg Sentiment Score</span>
+<div class="font-display-sm text-display-sm text-[#03191e] mt-1 font-bold">+0.74</div>
+</div>
+<div class="p-2 rounded-lg bg-[#03191e] text-[#fbfbff]">
+<span class="material-symbols-outlined text-[20px]">sentiment_very_satisfied</span>
+</div>
+</div>
+<div class="flex items-center justify-between pt-3 border-t border-[#03191e]/10">
+<span class="inline-flex items-center text-[11px] font-semibold text-[#03191e] bg-white/70 px-2 py-0.5 rounded-full border border-[#03191e]/10">
+            High Alignment (88%)
+          </span>
+<span class="text-[11px] text-[#03191e]/70 font-medium">+0.08 variance</span>
+</div>
+</div>
+<!-- Stat 4: Avg Latency -->
+<div class="relative rounded-xl p-5 border border-[#03191e]/10 shadow-[0_2px_8px_-2px_rgba(3,25,30,0.04)] hover:border-[#03191e]/20 transition-all flex flex-col justify-between bg-[#ebe1c1]">
+<div class="flex items-start justify-between mb-2">
+<div>
+<span class="text-xs font-semibold uppercase tracking-wider text-[#03191e]/50 font-label-sm">Roundtrip Latency</span>
+<div class="font-display-sm text-display-sm text-[#03191e] mt-1 font-bold">22ms</div>
+</div>
+<div class="p-2 rounded-lg bg-[#03191e]/5 text-[#03191e]">
+<span class="material-symbols-outlined text-[20px]">bolt</span>
+</div>
+</div>
+<div class="flex items-center justify-between pt-3 border-t border-[#03191e]/5">
+<span class="inline-flex items-center text-[11px] font-semibold text-[#126e51] bg-[#126e51]/10 px-2 py-0.5 rounded-full font-telemetry-sm">
+<span class="w-1.5 h-1.5 rounded-full bg-[#126e51] mr-1"></span> P95: 38ms
+          </span>
+<span class="text-[11px] text-[#03191e]/50 font-medium">Ultra-low jitter</span>
+</div>
+</div>
+</section>
+<!-- 2. Row A: Calls-Over-Time Line Chart (2/3) + Sentiment Distribution (1/3) -->
+<section class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+<!-- Calls-Over-Time Line Chart (8/12) -->
+<div class="lg:col-span-8 rounded-xl p-6 border border-[#03191e]/10 shadow-[0_2px_8px_-2px_rgba(3,25,30,0.04)] flex flex-col justify-between bg-white">
+<div class="flex flex-wrap items-center justify-between mb-4 pb-3 border-b border-[#03191e]/6 gap-2">
+<div>
+<h2 class="font-headline-sm text-headline-sm font-bold text-[#03191e]">Daily Conversation Volume</h2>
+<p class="font-body-sm text-body-sm text-[#03191e]/60 mt-0.5">Aggregated session density across all active production agents.</p>
+</div>
+<div class="flex items-center gap-3">
+<div class="flex items-center gap-1.5 text-xs text-[#03191e]/70">
+<span class="w-2.5 h-2.5 rounded-full bg-[#03191e]"></span>
+<span class="font-medium">Direct Voice Sessions</span>
+</div>
+<div class="flex items-center gap-1.5 text-xs text-[#03191e]/40">
+<span class="w-2.5 h-2.5 rounded-full bg-[#ebe1c1] border border-[#03191e]/20"></span>
+<span class="font-medium">Relay Fallbacks</span>
+</div>
+</div>
+</div>
+<!-- SVG Line Chart Canvas -->
+<div class="relative w-full h-64 sm:h-72 mt-2">
+<svg class="w-full h-full overflow-visible" preserveAspectRatio="none" viewBox="0 0 760 260">
+<defs>
+<linearGradient id="areaGradient" x1="0" x2="0" y1="0" y2="1">
+<stop offset="0%" stop-color="#03191e" stop-opacity="0.14"></stop>
+<stop offset="60%" stop-color="#ebe1c1" stop-opacity="0.10"></stop>
+<stop offset="100%" stop-color="#fbfbff" stop-opacity="0.0"></stop>
+</linearGradient>
+</defs>
+<!-- Horizontal Background Guide Lines -->
+<line class="chart-grid-line" x1="0" x2="760" y1="30" y2="30"></line>
+<text fill="#03191e" font-family="Montserrat" font-size="10" opacity="0.35" x="0" y="24">80 calls/day</text>
+<line class="chart-grid-line" x1="0" x2="760" y1="90" y2="90"></line>
+<text fill="#03191e" font-family="Montserrat" font-size="10" opacity="0.35" x="0" y="84">60 calls/day</text>
+<line class="chart-grid-line" x1="0" x2="760" y1="150" y2="150"></line>
+<text fill="#03191e" font-family="Montserrat" font-size="10" opacity="0.35" x="0" y="144">40 calls/day</text>
+<line class="chart-grid-line" x1="0" x2="760" y1="210" y2="210"></line>
+<text fill="#03191e" font-family="Montserrat" font-size="10" opacity="0.35" x="0" y="204">20 calls/day</text>
+<!-- Gradient Area Fill -->
+<path class="chart-trend-area" d="M 10 190 
+                     C 60 180, 110 150, 160 140 
+                     C 210 130, 260 170, 310 110 
+                     C 360 50, 410 80, 460 65 
+                     C 510 50, 560 120, 610 90 
+                     C 660 60, 710 40, 750 35 
+                     L 750 240 L 10 240 Z"></path>
+<!-- Smooth Master Bezier Curve -->
+<path class="chart-trend-path" d="M 10 190 
+                     C 60 180, 110 150, 160 140 
+                     C 210 130, 260 170, 310 110 
+                     C 360 50, 410 80, 460 65 
+                     C 510 50, 560 120, 610 90 
+                     C 660 60, 710 40, 750 35"></path>
+<!-- Baseline Axis -->
+<line stroke="#03191e" stroke-opacity="0.12" stroke-width="1" x1="0" x2="760" y1="240" y2="240"></line>
+<!-- Interactive Milestone / Data Points -->
+<g class="cursor-pointer group">
+<circle cx="310" cy="110" fill="#ebe1c1" r="4.5" stroke="#03191e" stroke-width="2"></circle>
+<!-- Pin Tooltip -->
+<rect fill="#03191e" height="28" rx="6" width="100" x="260" y="70"></rect>
+<text fill="#fbfbff" font-family="Montserrat" font-size="10.5" font-weight="600" text-anchor="middle" x="310" y="88">Oct 14: 52 calls</text>
+</g>
+<g class="cursor-pointer group">
+<circle cx="460" cy="65" fill="#ebe1c1" r="4.5" stroke="#03191e" stroke-width="2"></circle>
+<rect fill="#03191e" height="28" rx="6" width="100" x="410" y="24"></rect>
+<text fill="#fbfbff" font-family="Montserrat" font-size="10.5" font-weight="600" text-anchor="middle" x="460" y="42">Oct 21: 68 calls</text>
+</g>
+<circle cx="750" cy="35" fill="#03191e" r="5" stroke="#ebe1c1" stroke-width="2.5"></circle>
+</svg>
+<!-- Day Labels -->
+<div class="flex justify-between text-[11px] font-medium text-[#03191e]/50 mt-1 px-2 font-telemetry-sm">
+<span class="">Oct 01</span>
+<span class="">Oct 06</span>
+<span class="">Oct 12</span>
+<span class="">Oct 18</span>
+<span class="">Oct 24</span>
+<span class="">Oct 31</span>
+</div>
+</div>
+<div class="mt-4 pt-3 border-t border-[#03191e]/6 flex items-center justify-between text-xs text-[#03191e]/70">
+<span class="">Weekly Peak Traffic: <strong class="text-[#03191e]">Thursdays 14:00 - 17:00 UTC</strong></span>
+<span class="font-medium text-[#03191e]">Avg Call Concurrency: 4.8 streams</span>
+</div>
+</div>
+<!-- Sentiment Distribution (4/12) -->
+<div class="lg:col-span-4 rounded-xl p-6 border border-[#03191e]/10 shadow-[0_2px_8px_-2px_rgba(3,25,30,0.04)] flex flex-col justify-between bg-[#ebe1c1]">
+<div>
+<div class="flex items-center justify-between mb-4 pb-3 border-b border-[#03191e]/6">
+<h2 class="font-headline-sm text-headline-sm font-bold text-[#03191e]">Sentiment Breakdown</h2>
+<span class="text-[11px] font-semibold uppercase tracking-wider text-[#03191e]/50">30-Day Index</span>
+</div>
+<!-- Donut SVG Visual -->
+<div class="relative flex items-center justify-center my-3">
+<svg class="-rotate-90" height="190" viewBox="0 0 190 190" width="190">
+<!-- Total circumference ~ 471 (2 * pi * 75) -->
+<!-- Track Base -->
+<circle cx="95" cy="95" fill="none" r="72" stroke="#fbfbff" stroke-width="18"></circle>
+<!-- Friction / Negative (8%) = 37.6 -->
+<circle cx="95" cy="95" fill="none" r="72" stroke="#992828" stroke-dasharray="38 433" stroke-dashoffset="-433" stroke-linecap="round" stroke-width="18"></circle>
+<!-- Neutral (24%) = 113 -->
+<circle cx="95" cy="95" fill="none" r="72" stroke="#ebe1c1" stroke-dasharray="113 358" stroke-dashoffset="-320" stroke-linecap="round" stroke-width="18"></circle>
+<!-- Positive (68%) = 320 -->
+<circle cx="95" cy="95" fill="none" r="72" stroke="#03191e" stroke-dasharray="320 151" stroke-dashoffset="0" stroke-linecap="round" stroke-width="18"></circle>
+</svg>
+<!-- Center Callout -->
+<div class="absolute inset-0 flex flex-col items-center justify-center pointer-events-none text-center">
+<span class="font-display-sm text-display-sm font-bold text-[#03191e] tracking-tight">68%</span>
+<span class="text-[11px] font-semibold text-[#03191e]/60 uppercase tracking-wider">Positive Tone</span>
+</div>
+</div>
+<!-- Elegant Legend List -->
+<div class="space-y-2.5 mt-4">
+<div class="flex items-center justify-between p-2 rounded-lg bg-[#fbfbff] border border-[#03191e]/5">
+<div class="flex items-center gap-2">
+<span class="w-3 h-3 rounded-full bg-[#03191e]"></span>
+<span class="text-xs font-semibold text-[#03191e]">Positive Alignment</span>
+</div>
+<div class="text-xs font-bold text-[#03191e]">68% <span class="font-normal text-[#03191e]/50 font-telemetry-sm">(971)</span></div>
+</div>
+<div class="flex items-center justify-between p-2 rounded-lg bg-[#fbfbff] border border-[#03191e]/5">
+<div class="flex items-center gap-2">
+<span class="w-3 h-3 rounded-full bg-[#ebe1c1] border border-[#03191e]/20"></span>
+<span class="text-xs font-semibold text-[#03191e]">Neutral / Inquisitive</span>
+</div>
+<div class="text-xs font-bold text-[#03191e]">24% <span class="font-normal text-[#03191e]/50 font-telemetry-sm">(343)</span></div>
+</div>
+<div class="flex items-center justify-between p-2 rounded-lg bg-[#fbfbff] border border-[#03191e]/5">
+<div class="flex items-center gap-2">
+<span class="w-3 h-3 rounded-full bg-[#992828]"></span>
+<span class="text-xs font-semibold text-[#03191e]">Friction &amp; Escalation</span>
+</div>
+<div class="text-xs font-bold text-[#992828]">8% <span class="font-normal text-[#03191e]/50 font-telemetry-sm">(114)</span></div>
+</div>
+</div>
+</div>
+<div class="mt-4 pt-3 border-t border-[#03191e]/6 text-center">
+<span class="text-[11px] text-[#03191e]/60 font-medium">92% of friction resolved during first-turn retry.</span>
+</div>
+</div>
+</section>
+<!-- 3. Row B: Topics Bar Chart (6/12) + Latency Trend Chart (6/12) -->
+<section class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+<!-- Conversation Topics Bar Chart -->
+<div class="lg:col-span-6 rounded-xl p-6 border border-[#03191e]/10 shadow-[0_2px_8px_-2px_rgba(3,25,30,0.04)] bg-[#ebe1c1] flex flex-col justify-between">
+<div>
+<div class="flex items-center justify-between mb-4 pb-3 border-b border-[#03191e]/6">
+<div>
+<h2 class="font-headline-sm text-headline-sm font-bold text-[#03191e]">Topics</h2>
+<p class="font-body-sm text-body-sm text-[#03191e]/60 mt-0.5">Distribution across key discussion subjects &amp; categories.</p>
+</div>
+<div class="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[#03191e]/5 border border-[#03191e]/10 text-xs font-semibold text-[#03191e]/70 font-telemetry-sm">
+
+
+</div>
+</div>
+
+<!-- Expressive Topics Bar Chart Canvas with Baseline & Ticks -->
+<div class="relative w-full h-44 mt-2 pt-2">
+<svg class="w-full h-full overflow-visible" preserveAspectRatio="none" viewBox="0 0 540 140">
+<!-- Horizontal Guide Lines -->
+<line class="chart-grid-line" x1="0" x2="540" y1="20" y2="20"></line>
+<text fill="#03191e" font-family="Montserrat" font-size="9" opacity="0.4" x="0" y="16">500 calls</text>
+<line class="chart-grid-line" x1="0" x2="540" y1="65" y2="65"></line>
+<text fill="#03191e" font-family="Montserrat" font-size="9" opacity="0.4" x="0" y="61">250 calls</text>
+<line stroke="#03191e" stroke-opacity="0.12" stroke-width="1" x1="0" x2="540" y1="120" y2="120"></line>
+
+<!-- Bar 1: Architecture & Edge (482 calls, 33.7%) -->
+<g class="group cursor-pointer">
+<rect fill="#03191e" height="96" rx="4" width="38" x="45" y="24"></rect>
+<text fill="#03191e" font-family="Montserrat" font-size="10" font-weight="600" text-anchor="middle" x="64" y="18">482</text>
+</g>
+
+<!-- Bar 2: Billing & Metering (318 calls, 22.2%) -->
+<g class="group cursor-pointer">
+<rect fill="#03191e" fill-opacity="0.85" height="63" rx="4" width="38" x="125" y="57"></rect>
+<text fill="#03191e" font-family="Montserrat" font-size="10" font-weight="600" text-anchor="middle" x="144" y="51">318</text>
+</g>
+
+<!-- Bar 3: Model Handshake (264 calls, 18.5%) -->
+<g class="group cursor-pointer">
+<rect fill="#655e45" height="52" rx="4" width="38" x="205" y="68"></rect>
+<text fill="#03191e" font-family="Montserrat" font-size="10" font-weight="600" text-anchor="middle" x="224" y="62">264</text>
+</g>
+
+<!-- Bar 4: API Integration (210 calls, 14.7%) -->
+<g class="group cursor-pointer">
+<rect fill="#03191e" fill-opacity="0.65" height="42" rx="4" width="38" x="285" y="78"></rect>
+<text fill="#03191e" font-family="Montserrat" font-size="10" font-weight="600" text-anchor="middle" x="304" y="72">210</text>
+</g>
+
+<!-- Bar 5: Audio Codecs (154 calls, 10.9%) -->
+<g class="group cursor-pointer">
+<rect fill="#03191e" fill-opacity="0.45" height="30" rx="4" width="38" x="365" y="90"></rect>
+<text fill="#03191e" font-family="Montserrat" font-size="10" font-weight="600" text-anchor="middle" x="384" y="84">154</text>
+</g>
+
+<!-- Bar 6: Knowledge Retrieval (86 calls, 6.0%) -->
+<g class="group cursor-pointer">
+<rect fill="#03191e" fill-opacity="0.28" height="17" rx="4" width="38" x="445" y="103"></rect>
+<text fill="#03191e" font-family="Montserrat" font-size="10" font-weight="600" text-anchor="middle" x="464" y="97">86</text>
+</g>
+</svg>
+</div>
+
+<!-- X-Axis Labels -->
+<div class="grid grid-cols-6 gap-1 text-center text-[10px] font-medium text-[#03191e]/70 mt-1 pb-1 font-telemetry-sm">
+<span class="truncate px-0.5" title="Architecture &amp; Edge">Arch &amp; Edge</span>
+<span class="truncate px-0.5" title="Billing &amp; Metering">Billing</span>
+<span class="truncate px-0.5" title="Model Handshake">Handshake</span>
+<span class="truncate px-0.5" title="REST &amp; WebSocket API">API Integ</span>
+<span class="truncate px-0.5" title="Audio Codecs">Codecs</span>
+<span class="truncate px-0.5" title="Knowledge Retrieval">Retrieval</span>
+</div>
+
+<!-- Topic Category Pills with Sentiment Score -->
+<div class="grid grid-cols-3 gap-2 mt-3 pt-2.5 border-t border-[#03191e]/6 text-xs">
+
+
+
+</div>
+</div>
+
+<div class="mt-3 pt-3 border-t border-[#03191e]/6 flex items-center justify-between text-xs text-[#03191e]/60">
+
+<span class="font-medium text-[#03191e] font-telemetry-sm">6 Core Classes</span>
+</div>
+</div>
+<!-- Latency Trend & Waveform Relay Aesthetic -->
+<div class="lg:col-span-6 rounded-xl p-6 border border-[#03191e]/10 shadow-[0_2px_8px_-2px_rgba(3,25,30,0.04)] bg-white">
+<div class="flex items-center justify-between mb-4 pb-3 border-b border-[#03191e]/6">
+<div>
+<h2 class="font-headline-sm text-headline-sm font-bold text-[#03191e]">Turn Latency &amp; Stream Jitter</h2>
+<p class="font-body-sm text-body-sm text-[#03191e]/60 mt-0.5">Real-time breakdown of audio streaming pipeline phases.</p>
+</div>
+<span class="px-2.5 py-1 rounded-full bg-[#126e51]/10 text-[#126e51] text-[11px] font-semibold font-telemetry-sm">
+            Optimal: &lt;50ms
+          </span>
+</div>
+<!-- Latency Chart Canvas -->
+<div class="relative w-full h-44 mt-1">
+<svg class="w-full h-full overflow-visible" preserveAspectRatio="none" viewBox="0 0 600 160">
+<!-- Reference Lines -->
+<line stroke="#03191e" stroke-dasharray="2 2" stroke-opacity="0.06" x1="0" x2="600" y1="40" y2="40"></line>
+<text fill="#03191e" font-family="Montserrat" font-size="9" opacity="0.3" x="5" y="35">40ms (SLA Max)</text>
+<line stroke="#03191e" stroke-dasharray="2 2" stroke-opacity="0.06" x1="0" x2="600" y1="90" y2="90"></line>
+<text fill="#03191e" font-family="Montserrat" font-size="9" opacity="0.3" x="5" y="85">20ms (Target)</text>
+<!-- Edge Handshake Path (Line 1 - Solid dark ink) -->
+<path d="M 0 105 Q 60 95, 120 100 T 240 88 T 360 96 T 480 84 T 600 90" fill="none" stroke="#03191e" stroke-linecap="round" stroke-width="2.5"></path>
+<!-- Relay Buffer (Line 2 - Pearl Beige with accent) -->
+<path d="M 0 118 Q 70 110, 140 114 T 280 102 T 420 110 T 540 98 T 600 104" fill="none" stroke="#655e45" stroke-dasharray="3 3" stroke-width="1.8"></path>
+<!-- Fallback Server Spikes (Line 3 - Faint highlight) -->
+<path d="M 0 135 Q 90 130, 180 132 T 330 65 T 450 128 T 600 125" fill="none" stroke="#992828" stroke-opacity="0.7" stroke-width="1.5"></path>
+<!-- Anomaly Spike Marker -->
+<circle cx="330" cy="65" fill="#992828" r="4"></circle>
+<rect fill="#992828" height="20" rx="4" width="80" x="290" y="38"></rect>
+<text fill="#fbfbff" font-family="Montserrat" font-size="9" font-weight="600" text-anchor="middle" x="330" y="52">Spike: 62ms</text>
+</svg>
+</div>
+<!-- Latency Legend Strip -->
+<div class="grid grid-cols-3 gap-2 mt-4 pt-3 border-t border-[#03191e]/6">
+<div class="p-2 rounded-lg bg-[#fbfbff] border border-[#03191e]/5">
+<span class="text-[10px] uppercase font-bold text-[#03191e]/50 block">Edge Handshake</span>
+<span class="font-telemetry-sm text-telemetry-sm font-bold text-[#03191e]">18ms Avg</span>
+</div>
+<div class="p-2 rounded-lg bg-[#fbfbff] border border-[#03191e]/5">
+<span class="text-[10px] uppercase font-bold text-[#03191e]/50 block">Relay Buffer</span>
+<span class="font-telemetry-sm text-telemetry-sm font-bold text-[#03191e]">22ms Avg</span>
+</div>
+<div class="p-2 rounded-lg bg-[#fbfbff] border border-[#03191e]/5">
+<span class="text-[10px] uppercase font-bold text-[#03191e]/50 block">Fallback Variance</span>
+<span class="font-telemetry-sm text-telemetry-sm font-bold text-[#992828]">0.4% triggered</span>
+</div>
+</div>
+</div>
+</section>
+<!-- 4. Row C: Per-Persona Performance Table -->
+<section class="rounded-xl border border-[#03191e]/10 shadow-[0_2px_8px_-2px_rgba(3,25,30,0.04)] overflow-hidden bg-[#ebe1c1]">
+<!-- Table Header & Filter Row -->
+<div class="p-6 pb-4 flex flex-wrap items-center justify-between border-b border-[#03191e]/8 gap-4">
+<div>
+<h2 class="font-headline-sm text-headline-sm font-bold text-[#03191e]">Agent &amp; Persona Performance Registry</h2>
+<p class="font-body-sm text-body-sm text-[#03191e]/60 mt-0.5">Individual telemetry matrix across deployed voice persona workers.</p>
+</div>
+<div class="flex items-center gap-3">
+<div class="relative">
+<input class="pl-8 pr-3 py-1.5 text-xs rounded-lg border border-[#03191e]/15 bg-white text-[#03191e] focus:outline-none focus:ring-1 focus:ring-[#03191e] w-48" placeholder="Search persona..." type="text">
+<span class="material-symbols-outlined absolute left-2.5 top-2 text-[16px] text-[#03191e]/40">search</span>
+</div>
+
+</div>
+</div>
+<!-- Table Body -->
+<div class="overflow-x-auto">
+<table class="w-full text-left border-collapse">
+<thead>
+<tr class="bg-[#fbfbff] border-b border-[#03191e]/8 text-[11px] font-bold text-[#03191e]/60 uppercase tracking-wider">
+<th class="py-3.5 px-6">Voice Persona</th>
+<th class="py-3.5 px-4 text-right">Total Sessions</th>
+<th class="py-3.5 px-4 text-right">Avg Duration</th>
+<th class="py-3.5 px-6">Sentiment Alignment</th>
+<th class="py-3.5 px-4 text-center">P95 Latency</th>
+<th class="py-3.5 px-4 text-center">Handoff Success</th>
+
+</tr>
+</thead>
+<tbody class="divide-y divide-[#03191e]/6 text-xs text-[#03191e]">
+<!-- Persona Row 1 -->
+<tr class="hover:bg-[#ebe1c1]/15 transition-colors group">
+<td class="py-4 px-6">
+<div class="flex items-center gap-3">
+<div class="w-9 h-9 rounded-lg bg-[#03191e] text-[#fbfbff] flex items-center justify-center font-bold text-xs">
+                    AS
+                  </div>
+<div>
+<div class="font-semibold text-sm text-[#03191e] flex items-center gap-1.5">
+                      Aura Architecture Specialist
+                      <span class="px-1.5 py-0.2 rounded bg-[#ebe1c1] text-[10px] font-medium text-[#03191e]">Production</span>
+</div>
+<div class="text-[#03191e]/50 text-[11px] font-telemetry-sm">v2.4-whisper-large • us-east-aurora</div>
+</div>
+</div>
+</td>
+<td class="py-4 px-4 text-right font-telemetry-sm font-semibold">614</td>
+<td class="py-4 px-4 text-right font-telemetry-sm">18m 45s</td>
+<td class="py-4 px-6">
+<div class="flex items-center gap-3">
+<div class="w-24 h-2 rounded-full bg-[#03191e]/10 overflow-hidden">
+<div class="h-full bg-[#03191e] rounded-full" style="width: 88%;"></div>
+</div>
+<span class="font-bold text-xs text-[#03191e]">+0.88</span>
+</div>
+</td>
+<td class="py-4 px-4 text-center">
+<span class="inline-flex items-center px-2 py-0.5 rounded-full bg-[#126e51]/10 text-[#126e51] font-telemetry-sm text-[11px] font-semibold">
+                  24ms
+                </span>
+</td>
+<td class="py-4 px-4 text-center">
+<span class="font-telemetry-sm text-xs font-semibold text-[#03191e]">99.1%</span>
+</td>
+
+</tr>
+<!-- Persona Row 2 -->
+<tr class="hover:bg-[#ebe1c1]/15 transition-colors group">
+<td class="py-4 px-6">
+<div class="flex items-center gap-3">
+<div class="w-9 h-9 rounded-lg bg-[#ebe1c1] text-[#03191e] border border-[#03191e]/20 flex items-center justify-center font-bold text-xs">
+                    CC
+                  </div>
+<div>
+<div class="font-semibold text-sm text-[#03191e] flex items-center gap-1.5">
+                      Aura Customer Concierge
+                      <span class="px-1.5 py-0.2 rounded bg-[#ebe1c1] text-[10px] font-medium text-[#03191e]">Production</span>
+</div>
+<div class="text-[#03191e]/50 text-[11px] font-telemetry-sm">v2.1-neutral-fast • eu-central-1</div>
+</div>
+</div>
+</td>
+<td class="py-4 px-4 text-right font-telemetry-sm font-semibold">442</td>
+<td class="py-4 px-4 text-right font-telemetry-sm">11m 12s</td>
+<td class="py-4 px-6">
+<div class="flex items-center gap-3">
+<div class="w-24 h-2 rounded-full bg-[#03191e]/10 overflow-hidden">
+<div class="h-full bg-[#03191e] rounded-full" style="width: 74%;"></div>
+</div>
+<span class="font-bold text-xs text-[#03191e]">+0.74</span>
+</div>
+</td>
+<td class="py-4 px-4 text-center">
+<span class="inline-flex items-center px-2 py-0.5 rounded-full bg-[#126e51]/10 text-[#126e51] font-telemetry-sm text-[11px] font-semibold">
+                  21ms
+                </span>
+</td>
+<td class="py-4 px-4 text-center">
+<span class="font-telemetry-sm text-xs font-semibold text-[#03191e]">98.6%</span>
+</td>
+
+</tr>
+<!-- Persona Row 3 -->
+<tr class="hover:bg-[#ebe1c1]/15 transition-colors group">
+<td class="py-4 px-6">
+<div class="flex items-center gap-3">
+<div class="w-9 h-9 rounded-lg bg-[#03191e]/10 text-[#03191e] flex items-center justify-center font-bold text-xs">
+                    TR
+                  </div>
+<div>
+<div class="font-semibold text-sm text-[#03191e] flex items-center gap-1.5">
+                      Tech Support Relay
+                      <span class="px-1.5 py-0.2 rounded bg-[#03191e]/10 text-[10px] font-medium text-[#03191e]">Internal Test</span>
+</div>
+<div class="text-[#03191e]/50 text-[11px] font-telemetry-sm">v3.0-preview-ultra • us-west-2</div>
+</div>
+</div>
+</td>
+<td class="py-4 px-4 text-right font-telemetry-sm font-semibold">238</td>
+<td class="py-4 px-4 text-right font-telemetry-sm">16m 02s</td>
+<td class="py-4 px-6">
+<div class="flex items-center gap-3">
+<div class="w-24 h-2 rounded-full bg-[#03191e]/10 overflow-hidden">
+<div class="h-full bg-[#655e45] rounded-full" style="width: 61%;"></div>
+</div>
+<span class="font-bold text-xs text-[#03191e]">+0.61</span>
+</div>
+</td>
+<td class="py-4 px-4 text-center">
+<span class="inline-flex items-center px-2 py-0.5 rounded-full bg-[#b86b1e]/15 text-[#b86b1e] font-telemetry-sm text-[11px] font-semibold">
+                  42ms
+                </span>
+</td>
+<td class="py-4 px-4 text-center">
+<span class="font-telemetry-sm text-xs font-semibold text-[#03191e]">94.2%</span>
+</td>
+
+</tr>
+<!-- Persona Row 4 -->
+<tr class="hover:bg-[#ebe1c1]/15 transition-colors group">
+<td class="py-4 px-6">
+<div class="flex items-center gap-3">
+<div class="w-9 h-9 rounded-lg bg-[#03191e] text-[#fbfbff] flex items-center justify-center font-bold text-xs">
+                    EB
+                  </div>
+<div>
+<div class="font-semibold text-sm text-[#03191e] flex items-center gap-1.5">
+                      Executive Briefing Dispatch
+                      <span class="px-1.5 py-0.2 rounded bg-[#ebe1c1] text-[10px] font-medium text-[#03191e]">Production</span>
+</div>
+<div class="text-[#03191e]/50 text-[11px] font-telemetry-sm">v2.4-whisper-large • global-edge</div>
+</div>
+</div>
+</td>
+<td class="py-4 px-4 text-right font-telemetry-sm font-semibold">134</td>
+<td class="py-4 px-4 text-right font-telemetry-sm">08m 15s</td>
+<td class="py-4 px-6">
+<div class="flex items-center gap-3">
+<div class="w-24 h-2 rounded-full bg-[#03191e]/10 overflow-hidden">
+<div class="h-full bg-[#03191e] rounded-full" style="width: 92%;"></div>
+</div>
+<span class="font-bold text-xs text-[#03191e]">+0.92</span>
+</div>
+</td>
+<td class="py-4 px-4 text-center">
+<span class="inline-flex items-center px-2 py-0.5 rounded-full bg-[#126e51]/10 text-[#126e51] font-telemetry-sm text-[11px] font-semibold">
+                  19ms
+                </span>
+</td>
+<td class="py-4 px-4 text-center">
+<span class="font-telemetry-sm text-xs font-semibold text-[#03191e]">99.8%</span>
+</td>
+
+</tr>
+</tbody>
+</table>
+</div>
+<!-- Table Footer Pagination -->
+<div class="p-4 px-6 bg-[#fbfbff] border-t border-[#03191e]/8 flex items-center justify-between text-xs text-[#03191e]/60 font-medium">
+<span class="">Showing 4 of 4</span>
+<div class="flex items-center gap-2">
+<button class="px-3 py-1 rounded border border-[#03191e]/10 bg-white text-[#03191e]/40 cursor-not-allowed">Previous</button>
+<button class="px-3 py-1 rounded border border-[#03191e]/10 bg-white text-[#03191e]/40 cursor-not-allowed">Next</button>
+</div>
+</div>
+</section>
+</main>
+<!-- Ground Tier Minimal Footer -->
+
+
+
+</body></html>

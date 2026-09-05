@@ -8,7 +8,7 @@ from typing import AsyncIterable, Tuple
 
 from edge_tts import Communicate
 from app.config import settings
-from app.models.database import get_supabase
+from app.models.database import get_supabase, run_supabase
 from app.websocket.manager import manager, _append_log
 
 logger = logging.getLogger(__name__)
@@ -37,9 +37,9 @@ def strip_markdown(text: str) -> str:
 
 
 async def get_persona_voice_id(persona_id: str) -> str:
-    supabase = get_supabase()
+    client = get_supabase()
     try:
-        res = supabase.table("personas").select("voice_id").eq("id", persona_id).limit(1).execute()
+        res = await run_supabase(lambda: client.table("personas").select("voice_id").eq("id", persona_id).limit(1).execute())
         if res.data:
             return res.data[0]["voice_id"]
     except Exception:
@@ -83,7 +83,7 @@ async def stream_sentences(
         audio_buffer = bytearray()
         first_chunk_received = False
         try:
-            spoken_text = strip_markdown(sentence)
+            spoken_text = await asyncio.to_thread(strip_markdown, sentence)
             async for audio_chunk in synthesize_speech_stream(spoken_text, voice_id):
                 if not first_chunk_received:
                     first_audio_chunk_time = time.perf_counter()

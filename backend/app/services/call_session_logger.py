@@ -10,6 +10,7 @@ SESSION_LOG_MAX = 2000
 session_log_queues: dict[str, deque[dict]] = {}
 session_log_events: dict[str, list[asyncio.Event]] = {}
 session_log_locks: dict[str, asyncio.Lock] = {}
+_session_init_lock = asyncio.Lock()
 
 
 def _ensure_log_dir() -> None:
@@ -28,16 +29,19 @@ def _format_entry(entry: dict) -> str:
 
 
 async def _write_entry(session_id: str, entry: dict) -> None:
-    if session_id in session_log_queues:
-        lock = session_log_locks[session_id]
-    else:
-        _ensure_log_dir()
-        lock = asyncio.Lock()
-        session_log_queues[session_id] = deque(maxlen=SESSION_LOG_MAX)
-        session_log_locks[session_id] = lock
+    async with _session_init_lock:
+        if session_id not in session_log_queues:
+            _ensure_log_dir()
+            session_log_queues[session_id] = deque(maxlen=SESSION_LOG_MAX)
+            session_log_locks[session_id] = asyncio.Lock()
+
+    dq = session_log_queues.get(session_id)
+    lock = session_log_locks.get(session_id)
+    if dq is None or lock is None:
+        return
 
     async with lock:
-        session_log_queues[session_id].append(entry)
+        dq.append(entry)
 
         try:
             path = _log_path(session_id)

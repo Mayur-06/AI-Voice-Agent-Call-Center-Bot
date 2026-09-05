@@ -1,0 +1,479 @@
+<!DOCTYPE html><html lang="en" style=""><svg class="inline-defs-container" aria-hidden="true" style="position:absolute;width:0;height:0;overflow:hidden"></svg><head>
+<meta charset="utf-8">
+<meta content="width=device-width, initial-scale=1.0" name="viewport">
+<title>Aura — Voice Session</title>
+<!-- Material Symbols & Fonts -->
+<link href="https://fonts.googleapis.com" rel="preconnect">
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect">
+<link href="https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,400;0,500;0,600;1,400&amp;family=Plus+Jakarta+Sans:wght@400;500;600;700&amp;family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"><link href="https://fonts.googleapis.com/css2?family=Montserrat:ital,wght@0,300..900;1,300..900&amp;display=swap" rel="stylesheet" class=""><link href="https://fonts.googleapis.com/css2?family=Montserrat:ital,wght@0,100..900;1,100..900&amp;display=swap" rel="stylesheet" class="">
+<!-- Tailwind CSS -->
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<script id="tailwind-config">
+    tailwind.config = {
+      darkMode: "class",
+      theme: {
+        extend: {
+          "colors": {
+            "surface-dim": "#dadadc",
+            "surface-container-lowest": "#ffffff",
+            "surface-container": "#f5f4f0",
+            "surface-container-low": "#faf9f6",
+            "surface-container-high": "#eae8e2",
+            "surface-container-highest": "#e2dfd7",
+            "background": "#faf9fb",
+            "surface": "#faf9fb",
+            "primary": "#03191e",
+            "primary-container": "#03191e",
+            "on-primary": "#ffffff",
+            "secondary": "#655e45",
+            "secondary-container": "#ebe1c1",
+            "on-secondary-container": "#4d472f",
+            "outline": "#72787a",
+            "outline-variant": "#e2ded4",
+            "on-surface": "#1a1c1d",
+            "on-surface-variant": "#5a6062",
+            "error": "#a83232",
+            "error-container": "#fce8e6"
+          },
+          "borderRadius": {
+            "DEFAULT": "0.375rem",
+            "lg": "0.75rem",
+            "xl": "1rem",
+            "2xl": "1.5rem",
+            "full": "9999px"
+          },
+          "fontFamily": {
+            "headline": ["Plus Jakarta Sans", "sans-serif"],
+            "body": ["Inter", "sans-serif"]
+          }
+        }
+      }
+    };
+  </script>
+<style>
+    .material-symbols-outlined {
+      font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+      display: inline-block;
+      vertical-align: middle;
+      line-height: 1;
+    }
+
+    /* Organic ambient breathing aura */
+    @keyframes calm-breathe {
+      0%, 100% {
+        transform: scale(0.96);
+        opacity: 0.35;
+      }
+      50% {
+        transform: scale(1.08);
+        opacity: 0.7;
+      }
+    }
+    @keyframes calm-ripple-outer {
+      0%, 100% {
+        transform: scale(0.92);
+        opacity: 0.2;
+      }
+      50% {
+        transform: scale(1.15);
+        opacity: 0.45;
+      }
+    }
+    .animate-breathe {
+      animation: calm-breathe 6s ease-in-out infinite;
+    }
+    .animate-ripple {
+      animation: calm-ripple-outer 8s ease-in-out infinite;
+    }
+
+    /* Gentle soft waveform wave */
+    @keyframes warm-pulse {
+      0%, 100% { transform: scaleY(0.4); }
+      50% { transform: scaleY(1); }
+    }
+    .wave-1 { animation: warm-pulse 1.4s ease-in-out infinite; }
+    .wave-2 { animation: warm-pulse 1.2s ease-in-out infinite 0.2s; }
+    .wave-3 { animation: warm-pulse 1.6s ease-in-out infinite 0.4s; }
+    .wave-4 { animation: warm-pulse 1.3s ease-in-out infinite 0.1s; }
+    .wave-5 { animation: warm-pulse 1.5s ease-in-out infinite 0.3s; }
+
+    /* Custom elegant thin scrollbar */
+    ::-webkit-scrollbar {
+      width: 5px;
+      height: 5px;
+    }
+    ::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: rgba(3, 25, 30, 0.08);
+      border-radius: 9999px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: rgba(3, 25, 30, 0.18);
+    }
+  </style>
+<style class="">:root { --ghost-white: #fbfbff; } body, .bg-background, .bg-white, .bg-surface-container-lowest, .bg-surface-container-lowest\/80, .bg-surface-container-lowest\/70, .bg-surface-container-lowest\/60, .focus-within\:bg-white:focus-within { background-color: #fbfbff !important; } .to-surface-container-lowest { --tw-gradient-to: #fbfbff var(--tw-gradient-to-position) !important; }</style><style id="montserrat-font-override" class="">*:not(.material-symbols-outlined) { font-family: 'Montserrat', sans-serif !important; font-optical-sizing: auto; } body { font-family: 'Montserrat', sans-serif !important; } .material-symbols-outlined { font-family: 'Material Symbols Outlined' !important; }</style></head>
+<body class="bg-background text-on-surface antialiased font-body min-h-screen flex flex-col overflow-hidden selection:bg-secondary-container selection:text-primary"><svg class="inline-defs-container" aria-hidden="true" style="position:absolute;width:0;height:0;overflow:hidden"></svg>
+<meta charset="utf-8">
+<meta content="width=device-width, initial-scale=1.0" name="viewport">
+<title>Aura — Voice Session</title>
+<!-- Material Symbols & Fonts -->
+<link href="https://fonts.googleapis.com" rel="preconnect">
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect">
+<link href="https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,400;0,500;0,600;1,400&amp;family=Plus+Jakarta+Sans:wght@400;500;600;700&amp;family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"><link href="https://fonts.googleapis.com/css2?family=Montserrat:ital,wght@0,300..900;1,300..900&amp;display=swap" rel="stylesheet" class=""><link href="https://fonts.googleapis.com/css2?family=Montserrat:ital,wght@0,100..900;1,100..900&amp;display=swap" rel="stylesheet" class="">
+<!-- Tailwind CSS -->
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<script id="tailwind-config">
+    tailwind.config = {
+      darkMode: "class",
+      theme: {
+        extend: {
+          "colors": {
+            "surface-dim": "#dadadc",
+            "surface-container-lowest": "#ffffff",
+            "surface-container": "#f5f4f0",
+            "surface-container-low": "#faf9f6",
+            "surface-container-high": "#eae8e2",
+            "surface-container-highest": "#e2dfd7",
+            "background": "#faf9fb",
+            "surface": "#faf9fb",
+            "primary": "#03191e",
+            "primary-container": "#03191e",
+            "on-primary": "#ffffff",
+            "secondary": "#655e45",
+            "secondary-container": "#ebe1c1",
+            "on-secondary-container": "#4d472f",
+            "outline": "#72787a",
+            "outline-variant": "#e2ded4",
+            "on-surface": "#1a1c1d",
+            "on-surface-variant": "#5a6062",
+            "error": "#a83232",
+            "error-container": "#fce8e6"
+          },
+          "borderRadius": {
+            "DEFAULT": "0.375rem",
+            "lg": "0.75rem",
+            "xl": "1rem",
+            "2xl": "1.5rem",
+            "full": "9999px"
+          },
+          "fontFamily": {
+            "headline": ["Plus Jakarta Sans", "sans-serif"],
+            "body": ["Inter", "sans-serif"]
+          }
+        }
+      }
+    };
+  </script>
+<style>
+    .material-symbols-outlined {
+      font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+      display: inline-block;
+      vertical-align: middle;
+      line-height: 1;
+    }
+
+    /* Organic ambient breathing aura */
+    @keyframes calm-breathe {
+      0%, 100% {
+        transform: scale(0.96);
+        opacity: 0.35;
+      }
+      50% {
+        transform: scale(1.08);
+        opacity: 0.7;
+      }
+    }
+    @keyframes calm-ripple-outer {
+      0%, 100% {
+        transform: scale(0.92);
+        opacity: 0.2;
+      }
+      50% {
+        transform: scale(1.15);
+        opacity: 0.45;
+      }
+    }
+    .animate-breathe {
+      animation: calm-breathe 6s ease-in-out infinite;
+    }
+    .animate-ripple {
+      animation: calm-ripple-outer 8s ease-in-out infinite;
+    }
+
+    /* Gentle soft waveform wave */
+    @keyframes warm-pulse {
+      0%, 100% { transform: scaleY(0.4); }
+      50% { transform: scaleY(1); }
+    }
+    .wave-1 { animation: warm-pulse 1.4s ease-in-out infinite; }
+    .wave-2 { animation: warm-pulse 1.2s ease-in-out infinite 0.2s; }
+    .wave-3 { animation: warm-pulse 1.6s ease-in-out infinite 0.4s; }
+    .wave-4 { animation: warm-pulse 1.3s ease-in-out infinite 0.1s; }
+    .wave-5 { animation: warm-pulse 1.5s ease-in-out infinite 0.3s; }
+
+    /* Custom elegant thin scrollbar */
+    ::-webkit-scrollbar {
+      width: 5px;
+      height: 5px;
+    }
+    ::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: rgba(3, 25, 30, 0.08);
+      border-radius: 9999px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: rgba(3, 25, 30, 0.18);
+    }
+  </style>
+<style class="">:root { --ghost-white: #fbfbff; } body, .bg-background, .bg-white, .bg-surface-container-lowest, .bg-surface-container-lowest\/80, .bg-surface-container-lowest\/70, .bg-surface-container-lowest\/60, .focus-within\:bg-white:focus-within { background-color: #fbfbff !important; } .to-surface-container-lowest { --tw-gradient-to: #fbfbff var(--tw-gradient-to-position) !important; }</style><style id="montserrat-font-override" class="">*:not(.material-symbols-outlined) { font-family: 'Montserrat', sans-serif !important; font-optical-sizing: auto; } body { font-family: 'Montserrat', sans-serif !important; } .material-symbols-outlined { font-family: 'Material Symbols Outlined' !important; }</style>
+
+<!-- ======================================================== -->
+<!-- TOP APP BAR: SERENE, HUMAN, INTENTIONAL HEADER           -->
+<!-- ======================================================== -->
+<header class="flex justify-between items-center w-full px-8 h-16 border-b border-white/10 bg-[#03191e] backdrop-blur-md z-40 shrink-0"><div class=""></div><div class=""></div><div class="flex items-center space-x-3"></div></header>
+<!-- ======================================================== -->
+<!-- MAIN WORKSPACE: 3 BALANCED, WARM COLUMNS                 -->
+<!-- ======================================================== -->
+<main class="flex-1 grid grid-cols-1 md:grid-cols-[22rem_1fr] xl:grid-cols-[22rem_1fr_22rem] overflow-hidden bg-background">
+<!-- ============================================== -->
+<!-- LEFT COLUMN: HUMAN CONVERSATION TRANSCRIPT     -->
+<!-- ============================================== -->
+<section class="flex flex-col border-r border-outline-variant/70 bg-surface-container-lowest/60 backdrop-blur-sm overflow-hidden h-full">
+<!-- Header -->
+<div class="px-6 py-4 border-b border-outline-variant/60 flex items-center justify-between shrink-0"><div class="flex items-center space-x-2.5"><span class="font-headline font-semibold text-sm text-primary">Conversation</span><span class="text-xs text-outline font-normal">•</span><span class="text-xs text-on-surface-variant font-normal">Notes &amp; Flow</span></div><div class="flex items-center space-x-1"><button class="w-7 h-7 rounded-md flex items-center justify-center text-outline hover:text-primary hover:bg-surface-container-low transition-colors" title="Copy conversation"><span class="material-symbols-outlined text-[16px]">content_copy</span></button><button class="w-7 h-7 rounded-md flex items-center justify-center text-outline hover:text-primary hover:bg-surface-container-low transition-colors" title="Export notes"><span class="material-symbols-outlined text-[16px]">ios_share</span></button></div></div>
+<!-- Messages Container -->
+<div class="flex-1 overflow-y-auto px-6 py-5 space-y-6">
+<!-- Session Start Notice -->
+<div class="text-center">
+<span class="text-xs text-outline/80 font-normal">
+          Connected at 10:38 AM
+        </span>
+</div>
+<!-- Aura Statement 1 -->
+<div class="flex flex-col items-start space-y-1.5 max-w-[92%]">
+<div class="flex items-center space-x-2 px-1">
+<span class="text-xs font-semibold font-headline text-primary">Aura</span>
+<span class="text-[11px] text-outline">10:38 AM</span>
+</div>
+<div class="p-4 rounded-2xl rounded-tl-sm bg-secondary-container border border-secondary-container/90 text-sm text-primary leading-relaxed shadow-sm">
+          Good morning. I’ve gone through your architecture notes and the latest pipeline benchmarks. Where would you like to begin our focus today?
+        </div>
+</div>
+<!-- User Reply 1 -->
+<div class="flex flex-col items-end space-y-1.5 max-w-[90%] ml-auto">
+<div class="flex items-center space-x-2 px-1">
+<span class="text-[11px] text-outline">10:39 AM</span>
+<span class="text-xs font-medium text-on-surface-variant">You</span>
+</div>
+<div class="p-4 rounded-2xl rounded-tr-sm bg-white border border-outline-variant/80 text-sm text-primary leading-relaxed shadow-sm" style="background-color: rgb(251, 251, 255);">
+          Let’s start with the connection latency bottleneck. Are we dropping packets during the initial handshake under higher load?
+        </div>
+</div>
+<!-- Aura Statement 2 -->
+<div class="flex flex-col items-start space-y-1.5 max-w-[92%]">
+<div class="flex items-center space-x-2 px-1">
+<span class="text-xs font-semibold font-headline text-primary">Aura</span>
+<span class="text-[11px] text-outline">10:41 AM</span>
+</div>
+<div class="p-4 rounded-2xl rounded-tl-sm bg-secondary-container border border-secondary-container/90 text-sm text-primary leading-relaxed shadow-sm">
+          The initial handshake holds quite steady around 18 milliseconds. The friction really happens when fallback servers step in during traffic spikes, causing small bursts of jitter.
+        </div>
+</div>
+<!-- Aura Active / In-progress Statement -->
+<div class="flex flex-col items-start space-y-1.5 max-w-[92%]">
+<div class="flex items-center space-x-2 px-1">
+<span class="text-xs font-semibold font-headline text-primary">Aura</span>
+<span class="w-1.5 h-1.5 rounded-full bg-emerald-600 animate-pulse"></span>
+</div>
+<div class="p-4 rounded-2xl rounded-tl-sm bg-secondary-container border border-secondary-container/90 text-sm text-primary leading-relaxed shadow-sm">
+          I'm tracing where that relay handoff delays the stream. A lightweight relay buffer might gracefully absorb those spikes without adding noticeable lag...
+          <span class="inline-block w-1.5 h-3.5 bg-primary/70 align-middle ml-1 animate-pulse"></span>
+</div>
+</div>
+</div>
+<!-- Soft footer note -->
+
+</section>
+<!-- ============================================== -->
+<!-- CENTER STAGE: WARM ORGANIC VOICE CORE          -->
+<!-- ============================================== -->
+<section class="flex flex-col items-center justify-center p-8 relative overflow-hidden bg-gradient-to-b from-[#faf9f6] via-background to-surface-container-lowest">
+<!-- Gentle Ambient Backdrop Rings -->
+<div class="relative flex flex-col items-center justify-center w-full max-w-md my-auto py-12">
+<!-- Outer Soft Glow Rings -->
+<div class="absolute w-[22rem] h-[22rem] rounded-full border border-secondary-container/40 animate-ripple pointer-events-none"></div>
+<div class="absolute w-72 h-72 rounded-full border border-secondary-container/70 bg-[#ebe1c1]/15 blur-sm animate-breathe pointer-events-none"></div>
+<!-- Serene Radial Aura & Waves -->
+<div class="relative w-64 h-64 flex items-center justify-center">
+<svg class="absolute inset-0 w-full h-full transform -rotate-90 pointer-events-none" viewBox="0 0 200 200">
+<defs>
+<radialGradient cx="50%" cy="50%" fx="50%" fy="50%" id="gentleSunGlow" r="50%">
+<stop offset="0%" stop-color="#ebe1c1" stop-opacity="0.5"></stop>
+<stop offset="60%" stop-color="#ebe1c1" stop-opacity="0.15"></stop>
+<stop offset="100%" stop-color="#faf9fb" stop-opacity="0"></stop>
+</radialGradient>
+</defs>
+<circle cx="100" cy="100" fill="url(#gentleSunGlow)" r="82"></circle>
+<!-- Harmonious, breathing radial lines (warm & organic, not technical radar) -->
+<line stroke="#03191e" stroke-linecap="round" stroke-width="2" x1="100" x2="100" y1="24" y2="38"></line>
+<line stroke="#ebe1c1" stroke-linecap="round" stroke-width="2" x1="118" x2="114" y1="26" y2="40"></line>
+<line stroke="#03191e" stroke-linecap="round" stroke-width="2" x1="135" x2="128" y1="33" y2="46"></line>
+<line stroke="#ebe1c1" stroke-linecap="round" stroke-width="2.5" x1="150" x2="140" y1="45" y2="56"></line>
+<line stroke="#03191e" stroke-linecap="round" stroke-width="2" x1="162" x2="150" y1="60" y2="69"></line>
+<line stroke="#ebe1c1" stroke-linecap="round" stroke-width="2.5" x1="170" x2="156" y1="78" y2="84"></line>
+<line stroke="#03191e" stroke-linecap="round" stroke-width="2.5" x1="174" x2="158" y1="100" y2="100"></line>
+<line stroke="#ebe1c1" stroke-linecap="round" stroke-width="2" x1="170" x2="156" y1="122" y2="116"></line>
+<line stroke="#03191e" stroke-linecap="round" stroke-width="2" x1="162" x2="150" y1="140" y2="131"></line>
+<line stroke="#ebe1c1" stroke-linecap="round" stroke-width="2.5" x1="150" x2="140" y1="155" y2="144"></line>
+<line stroke="#03191e" stroke-linecap="round" stroke-width="2" x1="135" x2="128" y1="167" y2="154"></line>
+<line stroke="#03191e" stroke-linecap="round" stroke-width="2.5" x1="118" x2="114" y1="174" y2="160"></line>
+<line stroke="#03191e" stroke-linecap="round" stroke-width="2" x1="100" x2="100" y1="176" y2="162"></line>
+<line stroke="#ebe1c1" stroke-linecap="round" stroke-width="2.5" x1="82" x2="86" y1="174" y2="160"></line>
+<line stroke="#03191e" stroke-linecap="round" stroke-width="2" x1="65" x2="72" y1="167" y2="154"></line>
+<line stroke="#ebe1c1" stroke-linecap="round" stroke-width="2" x1="50" x2="60" y1="155" y2="144"></line>
+<line stroke="#03191e" stroke-linecap="round" stroke-width="2.5" x1="38" x2="50" y1="140" y2="131"></line>
+<line stroke="#ebe1c1" stroke-linecap="round" stroke-width="2" x1="30" x2="44" y1="122" y2="116"></line>
+<line stroke="#03191e" stroke-linecap="round" stroke-width="2.5" x1="26" x2="42" y1="100" y2="100"></line>
+<line stroke="#03191e" stroke-linecap="round" stroke-width="2" x1="30" x2="44" y1="78" y2="84"></line>
+<line stroke="#ebe1c1" stroke-linecap="round" stroke-width="2.5" x1="38" x2="50" y1="60" y2="69"></line>
+<line stroke="#03191e" stroke-linecap="round" stroke-width="2" x1="50" x2="60" y1="45" y2="56"></line>
+<line stroke="#03191e" stroke-linecap="round" stroke-width="2" x1="65" x2="72" y1="33" y2="46"></line>
+<line stroke="#ebe1c1" stroke-linecap="round" stroke-width="2.5" x1="82" x2="86" y1="26" y2="40"></line>
+</svg>
+<!-- Center Circular Tactile Mic Button -->
+<button class="relative z-20 w-24 h-24 rounded-full hover:bg-[#082a32] text-white flex items-center justify-center shadow-lg shadow-primary/15 transition-all duration-300 transform hover:scale-105 active:scale-95 group focus:outline-none focus:ring-4 focus:ring-secondary-container/60 bg-primary" id="mainMicBtn" style="background-color: var(--ink-black, #03191e);">
+<span class="material-symbols-outlined text-[36px] text-secondary-container group-hover:scale-105 transition-transform" data-icon="mic">mic_off</span>
+</button>
+</div>
+<!-- Human Status Indicator -->
+<div class="mt-8 flex flex-col items-center space-y-2 text-center"><div class="inline-flex items-center space-x-2.5 px-4 py-2 rounded-full bg-surface-container-lowest border border-outline-variant shadow-sm mb-3"><div class="flex items-center space-x-1 h-3.5 px-0.5"><span class="w-1 bg-primary rounded-full h-2 wave-1"></span><span class="w-1 bg-primary rounded-full h-3 wave-2"></span><span class="w-1 bg-secondary rounded-full h-3.5 wave-3"></span><span class="w-1 bg-primary rounded-full h-2 wave-4"></span><span class="w-1 bg-primary rounded-full h-1.5 wave-5"></span></div><span class="text-sm font-medium text-primary tracking-normal">Aura is speaking...</span></div><p class="text-xs text-outline font-normal leading-normal">Click mic to mute or press <kbd class="px-1.5 py-0.5 rounded bg-surface-container text-[11px] font-mono border border-outline-variant/60 text-primary">Space</kbd> to pause</p></div>
+</div>
+</section>
+<!-- ============================================== -->
+<!-- RIGHT COLUMN: SESSION CONTEXT & SHARED NOTES   -->
+<!-- ============================================== -->
+<section class="hidden xl:flex flex-col border-l border-outline-variant/70 bg-surface-container-lowest/70 backdrop-blur-sm overflow-y-auto h-full">
+<!-- Header -->
+<div class="px-6 py-4 border-b border-outline-variant/60 flex items-center justify-between shrink-0"><div class="flex items-center space-x-2"><span class="font-headline font-semibold text-sm text-primary whitespace-nowrap">Session Context</span></div></div>
+<!-- Body / Notes Drawer -->
+<div class="p-6 space-y-6">
+<!-- Speaking Partner Card -->
+<div class="p-4 rounded-xl bg-secondary-container border border-secondary-container/90 space-y-2.5"><div class="flex items-center space-x-3"><div class="w-10 h-10 rounded-full bg-primary flex items-center justify-center text-secondary-container shadow-sm shrink-0" style="background-color: var(--ink-black, #03191e);"><span class="material-symbols-outlined text-[20px]">auto_awesome</span></div><div class="min-w-0 flex-1"><h3 class="font-headline font-semibold text-sm text-primary truncate">Aura</h3><p class="text-xs text-on-surface-variant truncate">Architecture &amp; Research Partner</p></div></div><p class="text-xs text-primary leading-relaxed pt-1">Trained on your current workspace documentation, focused on thoughtful technical syntheses and direct problem-solving.</p></div>
+<!-- Curated Reference Docs -->
+<div class="space-y-3">
+<div class="flex items-center justify-between">
+<span class="text-xs font-semibold uppercase tracking-wider text-outline">Referenced in Call</span>
+<span class="text-xs text-outline">2 topics</span>
+</div>
+<div class="space-y-2">
+<!-- Doc 1 -->
+<div class="p-3 rounded-lg bg-secondary-container border border-secondary-container/90 hover:border-primary/40 transition-colors cursor-pointer group">
+<div class="flex items-center space-x-2.5">
+<span class="material-symbols-outlined text-[18px] text-primary" data-icon="description">description</span>
+<div class="min-w-0 flex-1">
+<p class="text-xs font-medium text-primary truncate group-hover:underline">Product_Architecture_v2.md</p>
+<p class="text-[11px] text-on-surface-variant truncate">Referenced section 4.2 (Handshakes)</p>
+</div>
+</div>
+</div>
+<!-- Doc 2 -->
+<div class="p-3 rounded-lg bg-secondary-container border border-secondary-container/90 hover:border-primary/40 transition-colors cursor-pointer group">
+<div class="flex items-center space-x-2.5">
+<span class="material-symbols-outlined text-[18px] text-secondary" data-icon="article">article</span>
+<div class="min-w-0 flex-1">
+<p class="text-xs font-medium text-primary truncate group-hover:underline">Edge_Telemetry_Summary.pdf</p>
+<p class="text-[11px] text-on-surface-variant truncate">Latency and jitter spikes under peak loads</p>
+</div>
+</div>
+</div>
+</div>
+</div>
+<!-- Live Discussion Highlights -->
+
+</div>
+<!-- Right Drawer Footer -->
+
+</section>
+</main>
+<!-- ======================================================== -->
+<!-- BOTTOM CONTROL DOCK: CLEAN, INTENTIONAL, CALM            -->
+<!-- ======================================================== -->
+<footer class="h-20 border-t border-outline-variant/70 bg-surface-container-lowest px-8 flex items-center justify-between shrink-0 z-30">
+<!-- Left: Quiet Audio Indicator -->
+<div class="hidden lg:flex items-center space-x-3 text-xs text-on-surface-variant w-52">
+<div class="w-8 h-8 rounded-full bg-surface-container flex items-center justify-center text-primary">
+<span class="material-symbols-outlined text-[17px]" data-icon="graphic_eq">graphic_eq</span>
+</div>
+<div>
+<p class="font-medium text-primary">Spatial Voice Audio</p>
+<p class="text-[11px] text-outline">Clear &amp; Natural</p>
+</div>
+</div>
+<!-- Center: Fallback Text / Notes Bar -->
+<div class="flex-1 max-w-xl mx-4">
+<div class="flex items-center bg-surface-container-low hover:bg-surface-container/60 border border-outline-variant rounded-full px-4 py-2 focus-within:border-primary focus-within:bg-white focus-within:ring-1 focus-within:ring-primary/20 transition-all shadow-sm">
+<input class="flex-1 bg-transparent border-0 focus:ring-0 text-sm text-primary placeholder:text-outline/70 p-0 focus:outline-none" placeholder="Type a message or note for Aura..." type="text">
+<button class="ml-2 w-7 h-7 rounded-full bg-primary hover:bg-[#082a32] text-white flex items-center justify-center transition-colors shadow-sm" title="Send note" style="background-color: var(--ink-black, #03191e);">
+<span class="material-symbols-outlined text-[15px]" data-icon="arrow_upward">arrow_upward</span>
+</button>
+</div>
+</div>
+<!-- Right: Clean Call Actions -->
+<div class="flex items-center space-x-3">
+<!-- Mute Mic Toggle -->
+<button class="w-10 h-10 rounded-full bg-surface-container hover:bg-surface-container-high text-primary flex items-center justify-center transition-colors" id="dockMicToggle" title="Mute Microphone">
+
+</button>
+<!-- Pause Session -->
+
+<!-- End Call Button (Understated refined crimson) -->
+<button class="h-10 px-5 rounded-full bg-[#9c2f2f] hover:bg-[#862525] text-white flex items-center space-x-2 transition-all shadow-sm active:scale-95">
+<span class="material-symbols-outlined text-[18px]" data-icon="call_end">call_end</span>
+<span class="text-xs font-semibold tracking-wide">End Call</span>
+</button>
+</div>
+</footer>
+<!-- Interactive micro-script -->
+<script>
+  const micButton = document.getElementById('mainMicBtn');
+  const dockMicToggle = document.getElementById('dockMicToggle');
+  let isMuted = false;
+
+  function toggleMute() {
+    isMuted = !isMuted;
+    const centerIcon = micButton.querySelector('span');
+    const dockIcon = dockMicToggle.querySelector('span');
+
+    if (isMuted) {
+      centerIcon.textContent = 'mic_off';
+      dockIcon.textContent = 'mic_off';
+      micButton.classList.remove('bg-primary');
+      micButton.classList.add('bg-error');
+      dockMicToggle.classList.add('text-error');
+    } else {
+      centerIcon.textContent = 'mic';
+      dockIcon.textContent = 'mic';
+      micButton.classList.add('bg-primary');
+      micButton.classList.remove('bg-error');
+      dockMicToggle.classList.remove('text-error');
+    }
+  }
+
+  micButton.addEventListener('click', toggleMute);
+  dockMicToggle.addEventListener('click', toggleMute);
+
+  // Spacebar shortcut
+  window.addEventListener('keydown', (e) => {
+    if (e.code === 'Space' && e.target.tagName !== 'INPUT') {
+      e.preventDefault();
+      toggleMute();
+    }
+  });
+</script>
+
+
+</body></html>
