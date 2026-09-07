@@ -18,6 +18,23 @@ from app.orchestration.graphs import (
     voice_router_graph,
     document_pipeline_graph,
 )
+from app.orchestration.pipeline import (
+    SessionPipelineState,
+    TextInMessage,
+    SentenceMessage,
+    TurnComplete,
+    FiveQueuePipeline,
+    safe_put_nowait,
+    make_event,
+)
+from app.orchestration.stages import (
+    ws_in_task,
+    vad_stt_task,
+    rag_llm_task,
+    tts_task,
+    ws_out_task,
+    supervisor_task,
+)
 
 __all__ = [
     "SentenceSplitterState",
@@ -36,4 +53,17 @@ __all__ = [
     "insights_graph",
     "voice_router_graph",
     "document_pipeline_graph",
+    "SessionPipelineState",
+    "TextInMessage",
+    "SentenceMessage",
+    "TurnComplete",
+    "FiveQueuePipeline",
+    "safe_put_nowait",
+    "make_event",
+    "ws_in_task",
+    "vad_stt_task",
+    "rag_llm_task",
+    "tts_task",
+    "ws_out_task",
+    "supervisor_task",
 ]

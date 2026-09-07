@@ -28,6 +28,12 @@ class Settings(BaseSettings):
     ws_receive_timeout_s: int = 180
     ws_max_concurrent_audio_tasks: int = 32
 
+    ws_audio_executor_workers: int = 4
+    ws_embedding_executor_workers: int = 2
+    ws_queue_max_size: int = 256
+
+    use_new_pipeline: bool = True
+
     pinecone_api_key: str = ""
     pinecone_index_name: str = "voice-agent-documents"
 

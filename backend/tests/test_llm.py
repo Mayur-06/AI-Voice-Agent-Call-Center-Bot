@@ -3,7 +3,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, AsyncMock
 from app.services.llm import generate_response, generate_response_stream, get_persona_system_prompt
 
 
@@ -47,7 +47,7 @@ async def test_generate_response_success(mock_settings):
     mock_client = MagicMock()
     mock_response = MagicMock()
     mock_response.text = "Generated response"
-    mock_client.models.generate_content.return_value = mock_response
+    mock_client.aio.models.generate_content = AsyncMock(return_value=mock_response)
 
     with patch("app.services.llm._client", mock_client):
         result = await generate_response([{"role": "user", "content": "Hello"}], "System prompt")
@@ -59,7 +59,7 @@ async def test_generate_response_multiple_turns(mock_settings):
     mock_client = MagicMock()
     mock_response = MagicMock()
     mock_response.text = "Reply"
-    mock_client.models.generate_content.return_value = mock_response
+    mock_client.aio.models.generate_content = AsyncMock(return_value=mock_response)
 
     messages = [
         {"role": "user", "content": "Hi"},
@@ -74,10 +74,26 @@ async def test_generate_response_multiple_turns(mock_settings):
 @pytest.mark.asyncio
 async def test_generate_response_stream_success(mock_settings):
     mock_client = MagicMock()
-    mock_client.models.generate_content_stream.return_value = [
+
+    class _MockAsyncIter:
+        def __init__(self, items):
+            self._items = list(items)
+            self._index = 0
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            if self._index >= len(self._items):
+                raise StopAsyncIteration
+            item = self._items[self._index]
+            self._index += 1
+            return item
+
+    mock_client.aio.models.generate_content_stream = MagicMock(return_value=_MockAsyncIter([
         _make_mock_chunk("Generated"),
         _make_mock_chunk(" response"),
-    ]
+    ]))
 
     with patch("app.services.llm._client", mock_client):
         chunks = []
@@ -89,9 +105,25 @@ async def test_generate_response_stream_success(mock_settings):
 @pytest.mark.asyncio
 async def test_generate_response_stream_multiple_turns(mock_settings):
     mock_client = MagicMock()
-    mock_client.models.generate_content_stream.return_value = [
+
+    class _MockAsyncIter:
+        def __init__(self, items):
+            self._items = list(items)
+            self._index = 0
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            if self._index >= len(self._items):
+                raise StopAsyncIteration
+            item = self._items[self._index]
+            self._index += 1
+            return item
+
+    mock_client.aio.models.generate_content_stream = MagicMock(return_value=_MockAsyncIter([
         _make_mock_chunk("Reply"),
-    ]
+    ]))
 
     messages = [
         {"role": "user", "content": "Hi"},

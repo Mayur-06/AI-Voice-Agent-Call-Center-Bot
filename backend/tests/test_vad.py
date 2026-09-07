@@ -25,10 +25,11 @@ def test_vad_initial_state(vad_buffer):
 def test_vad_speech_onset(vad_buffer):
     vad_buffer._is_speech = lambda frame: True
     frame = _make_frame(True)
-    result, triggered = vad_buffer.process(frame)
+    result, triggered, onset, end = vad_buffer.process(frame)
     assert result is None
     assert triggered is False
     assert vad_buffer.triggered is True
+    assert onset is not None
 
 
 def test_vad_reset(vad_buffer):

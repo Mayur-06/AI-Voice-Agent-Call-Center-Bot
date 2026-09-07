@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useVoiceCall } from '@/hooks/useVoiceCall';
 import useCallStore from '@/store/callStore';
+import { useSessionStore } from '@/store/session';
 import { Button } from '@/components/ui/button';
 import { API_BASE } from '@/config';
 
@@ -93,11 +94,18 @@ export default function SessionScreen() {
     selectedVoiceId,
     setSelectedPersona,
     setSelectedVoiceId,
-    startCall,
     error,
     setError,
     sessionId,
   } = useVoiceCall();
+
+  const setCallSessionId = useCallStore((s) => s.setSessionId);
+  const setCallStatus = useCallStore((s) => s.setStatus);
+  const setCallConnectionStatus = useCallStore((s) => s.setConnectionStatus);
+  const setCallTranscript = useCallStore((s) => s.setTranscript);
+  const setCallFiller = useCallStore((s) => s.setFiller);
+  const setCallLatencies = useCallStore((s) => s.setLatencies);
+  const setSessionConnectionStatus = useSessionStore((s) => s.setConnectionStatus);
 
   const [isStarting, setIsStarting] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
@@ -259,15 +267,41 @@ export default function SessionScreen() {
     if (!selectedPersona) return;
     setIsStarting(true);
     try {
-      await startCall();
-      const currentSessionId = useCallStore.getState().sessionId;
-      if (currentSessionId) {
-        navigate(`/call/${currentSessionId}`);
+      const response = await fetch(`${API_BASE}/api/sessions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          persona_id: selectedPersona,
+          selected_voice: selectedVoiceId || null,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to create session');
       }
+
+      const data = await response.json();
+      const newSessionId = data.id;
+      setCallSessionId(newSessionId);
+      setCallStatus('idle');
+      setCallConnectionStatus('disconnected');
+      setSessionConnectionStatus('disconnected');
+      setCallTranscript([]);
+      setError(null);
+      setCallFiller(null);
+      setCallLatencies({ stt: null, llm: null, ttsFirstAudio: null, total: null });
+      navigate(`/call/${newSessionId}`);
+    } catch (error) {
+      setError(error instanceof Error ? error.message : 'Failed to create session');
+      setCallStatus('idle');
+      setCallConnectionStatus('disconnected');
+      setSessionConnectionStatus('disconnected');
     } finally {
       setIsStarting(false);
     }
-  }, [selectedPersona, startCall, navigate]);
+  }, [selectedPersona, selectedVoiceId, setCallSessionId, setCallStatus, setCallConnectionStatus, setSessionConnectionStatus, setCallTranscript, setError, setCallFiller, setCallLatencies, navigate]);
 
   const canStart = Boolean(selectedPersona) && !isStarting;
 
