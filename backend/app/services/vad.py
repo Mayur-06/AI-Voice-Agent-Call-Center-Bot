@@ -1,4 +1,5 @@
 import collections
+import logging
 import os
 import threading
 import time
@@ -9,6 +10,8 @@ os.environ.setdefault("TORCH_HUB_TRUSTED_REPOSITORIES", "snakers4/silero-vad")
 
 _model = None
 _model_lock = threading.Lock()
+
+logger = logging.getLogger(__name__)
 
 
 def _get_model():
@@ -46,17 +49,16 @@ class VADBuffer:
         try:
             with torch.no_grad():
                 prob = model(audio.unsqueeze(0), self.sample_rate).item()
-            logger = __import__('logging').getLogger(__name__)
-            logger.debug("Silero VAD prob=%s threshold=%s", round(prob, 3), self.threshold)
+            logger.info("Silero VAD prob=%s threshold=%s triggered=%s", round(prob, 3), self.threshold, self.triggered)
             return prob >= self.threshold
         except Exception as exc:
-            logger = __import__('logging').getLogger(__name__)
-            logger.debug("Silero VAD frame error: %s", exc)
+            logger.info("Silero VAD frame error: %s", exc)
             return False
 
     def process(self, frame: bytes) -> tuple[bytes | None, bool, float | None, float | None]:
         if len(frame) % 2 != 0:
             return None, False, None, None
+        logger.debug("VAD process frame_len=%s triggered=%s", len(frame), self.triggered)
         is_speech = self._is_speech(frame)
         now = time.perf_counter()
         if not self.triggered:
@@ -79,8 +81,9 @@ class VADBuffer:
             if silence_ms >= settings.silence_threshold_ms:
                 audio = b"".join(self.speech_frames)
                 speech_end = now
+                speech_onset = self._speech_onset
                 self.reset()
-                return audio, True, self._speech_onset, speech_end
+                return audio, True, speech_onset, speech_end
             return None, False, self._speech_onset, None
 
     def process_bytes(self, data: bytes, frame_size: int) -> tuple[bytes | None, bool, float | None, float | None]:

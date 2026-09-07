@@ -21,7 +21,7 @@ class Settings(BaseSettings):
 
     audio_sample_rate: int = 16000
     vad_threshold: float = 0.1
-    silence_threshold_ms: int = 2000
+    silence_threshold_ms: int = 800
     audio_chunk_ms: int = 250
 
     ws_heartbeat_interval_s: int = 20
@@ -30,7 +30,7 @@ class Settings(BaseSettings):
 
     ws_audio_executor_workers: int = 4
     ws_embedding_executor_workers: int = 2
-    ws_queue_max_size: int = 256
+    ws_queue_max_size: int = 1024
 
     use_new_pipeline: bool = True
 

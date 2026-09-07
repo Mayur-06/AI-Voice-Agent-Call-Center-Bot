@@ -63,10 +63,11 @@ async def generate_response_stream(messages: list[dict[str, str]], system_prompt
         role = "user" if msg["role"] == "user" else "model"
         contents.append(types.Content(role=role, parts=[types.Part(text=msg["content"])]))
 
-    async for chunk in _client.aio.models.generate_content_stream(
+    stream = await _client.aio.models.generate_content_stream(
         model=settings.gemini_model,
         contents=contents,
         config=types.GenerateContentConfig(system_instruction=final_system_prompt),
-    ):
+    )
+    async for chunk in stream:
         if chunk.text:
             yield chunk.text

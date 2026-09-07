@@ -1,4 +1,5 @@
 import logging
+import os
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
@@ -10,8 +11,24 @@ from app.websocket.handler import router as ws_router
 from app.services.rag import check_pinecone_health
 from app.services.storage import ensure_recordings_bucket, ensure_documents_bucket
 
-logging.basicConfig(level=logging.INFO)
+# Ensure log directory exists
+log_dir = os.path.join(os.path.dirname(__file__), "..", "log")
+os.makedirs(log_dir, exist_ok=True)
+
+# Configure logging to both console and file
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler(os.path.join(log_dir, "backend.log"), mode="a"),
+    ],
+)
 logger = logging.getLogger(__name__)
+
+# Ensure VAD logger propagates
+logging.getLogger("app.services.vad").setLevel(logging.INFO)
+logging.getLogger("app.orchestration.stages").setLevel(logging.INFO)
 
 
 @asynccontextmanager
@@ -24,6 +41,10 @@ async def lifespan(app: FastAPI):
         max_workers=settings.ws_audio_executor_workers,
         thread_name_prefix="audio",
     )
+    app.state.vad_executor = ThreadPoolExecutor(
+        max_workers=1,
+        thread_name_prefix="vad",
+    )
     app.state.embedding_executor = ProcessPoolExecutor(
         max_workers=settings.ws_embedding_executor_workers,
     )
@@ -31,6 +52,7 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         app.state.audio_executor.shutdown(wait=True)
+        app.state.vad_executor.shutdown(wait=True)
         app.state.embedding_executor.shutdown(wait=True)
 
 

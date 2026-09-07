@@ -36,6 +36,7 @@ async def ws_in_task(state: SessionPipelineState) -> None:
             break
         if "bytes" in msg:
             safe_put_nowait(state.audio_in_queue, msg["bytes"])
+            logger.info("AUDIO_CHUNK_RECEIVED session=%s bytes=%s", state.session_id, len(msg["bytes"]))
         elif "text" in msg:
             data = json.loads(msg["text"])
             if data.get("type") == "ping":
@@ -46,6 +47,7 @@ async def ws_in_task(state: SessionPipelineState) -> None:
                 break
             if data.get("type") == "start_call":
                 state.call_started = True
+                logger.info("START_CALL_RECEIVED session=%s call_started=%s", state.session_id, state.call_started)
                 safe_put_nowait(state.control_queue, {"type": "start_call"})
                 continue
             if data.get("type") == "stop_playback":
@@ -59,32 +61,49 @@ async def ws_in_task(state: SessionPipelineState) -> None:
 
 
 async def vad_stt_task(state: SessionPipelineState, audio_executor) -> None:
+    logger.info("VAD_STT_TASK_STARTED session=%s", state.session_id)
     while True:
-        chunk = await state.audio_in_queue.get()
-        if chunk is None:
-            state.audio_in_queue.task_done()
-            break
-        if not state.call_started:
-            state.audio_in_queue.task_done()
-            continue
         try:
-            pcm = await asyncio.get_running_loop().run_in_executor(
-                audio_executor, decode_to_pcm, chunk, settings.audio_sample_rate
+            chunk = await state.audio_in_queue.get()
+            if chunk is None:
+                state.audio_in_queue.task_done()
+                break
+            if not state.call_started:
+                logger.debug("VAD_DROP_AUDIO call_started=False session=%s", state.session_id)
+                state.audio_in_queue.task_done()
+                continue
+            logger.info("VAD_PROCESS_AUDIO session=%s bytes=%s call_started=%s", state.session_id, len(chunk), state.call_started)
+            pcm = chunk
+            state.user_pcm_buffer.extend(pcm)
+
+            vad_frame_ms = 32
+            frame_size = int(settings.audio_sample_rate * 2 * (vad_frame_ms / 1000))
+            # Silero VAD requires exactly 512 samples (1024 bytes) for 16kHz
+            if settings.audio_sample_rate == 16000:
+                frame_size = 1024
+            elif settings.audio_sample_rate == 8000:
+                frame_size = 512
+            frame_audio, speech_ended, speech_onset, speech_end = await asyncio.get_running_loop().run_in_executor(
+                audio_executor, state.vad.process_bytes, pcm, frame_size
             )
-        except Exception:
-            state.audio_in_queue.task_done()
-            continue
 
-        state.user_pcm_buffer.extend(pcm)
+            logger.info("VAD_RESULT session=%s speech_ended=%s frame_audio_bytes=%s speech_onset=%s speech_end=%s",
+                         state.session_id, speech_ended, len(frame_audio) if frame_audio else 0, speech_onset, speech_end)
 
-        vad_frame_ms = 32
-        frame_size = int(settings.audio_sample_rate * 2 * (vad_frame_ms / 1000))
-        frame_audio, speech_ended, speech_onset, speech_end = await asyncio.get_running_loop().run_in_executor(
-            audio_executor, state.vad.process_bytes, pcm, frame_size
-        )
+            if speech_ended and frame_audio:
+                state.speech_detected.set()
+                logger.info("SPEECH_ENDED session=%s frame_bytes=%s", state.session_id, len(frame_audio))
+
+            if not speech_ended:
+                state.audio_in_queue.task_done()
+                continue
+        except Exception as e:
+            logger.exception("VAD_STT_TASK_ERROR session=%s error=%s", state.session_id, e)
+            raise
 
         if speech_ended and frame_audio:
             state.speech_detected.set()
+            logger.info("SPEECH_ENDED session=%s frame_bytes=%s", state.session_id, len(frame_audio))
 
         if not speech_ended:
             state.audio_in_queue.task_done()
@@ -114,6 +133,7 @@ async def vad_stt_task(state: SessionPipelineState, audio_executor) -> None:
             continue
 
         stt_latency_ms = int((time.perf_counter() - stt_start) * 1000)
+        logger.info("STT_RESULT session=%s text=%r latency_ms=%s", state.session_id, user_text, stt_latency_ms)
 
         if not user_text or is_noisy_transcription(user_text):
             state.audio_in_queue.task_done()
@@ -127,6 +147,7 @@ async def vad_stt_task(state: SessionPipelineState, audio_executor) -> None:
             state.ws_event_queue,
             make_event(state, "transcript_final", role="user", text=user_text, stt_latency_ms=stt_latency_ms),
         )
+        logger.info("TRANSCRIPT_SENT session=%s text=%r", state.session_id, user_text)
 
         safe_put_nowait(
             state.text_in_queue,
@@ -184,6 +205,7 @@ async def _run_llm_turn(
     state.conversation_mgr.append_user(msg.text)
 
     safe_put_nowait(state.ws_event_queue, make_event(state, "turn_started", turn_id=turn_id))
+    logger.info("TURN_STARTED session=%s turn_id=%s user_text=%r", state.session_id, turn_id, msg.text)
     state.turn_started_at = time.perf_counter()
 
     try:
@@ -203,6 +225,7 @@ async def _run_llm_turn(
 
     state.is_speaking = True
     safe_put_nowait(state.ws_event_queue, make_event(state, "status", message="thinking"))
+    logger.info("STATUS_THINKING session=%s turn_id=%s", state.session_id, turn_id)
     full_response = ""
     buffer = ""
     sentence_idx = 0
@@ -233,6 +256,7 @@ async def _run_llm_turn(
                 if not first_audio_sent:
                     first_audio_sent = True
                     safe_put_nowait(state.ws_event_queue, make_event(state, "status", message="speaking"))
+                    logger.info("STATUS_SPEAKING session=%s turn_id=%s", state.session_id, turn_id)
                 safe_put_nowait(
                     state.sentence_queue,
                     SentenceMessage(
@@ -241,10 +265,6 @@ async def _run_llm_turn(
                         index=sentence_idx,
                         first_sentence=(sentence_idx == 0),
                     ),
-                )
-                safe_put_nowait(
-                    state.ws_event_queue,
-                    make_event(state, "response_text", turn_id=turn_id, text=sentence, index=sentence_idx),
                 )
                 sentence_idx += 1
                 await asyncio.sleep(0)
@@ -259,10 +279,6 @@ async def _run_llm_turn(
         safe_put_nowait(
             state.sentence_queue,
             SentenceMessage(text=buffer.strip(), turn_id=turn_id, index=sentence_idx),
-        )
-        safe_put_nowait(
-            state.ws_event_queue,
-            make_event(state, "response_text", turn_id=turn_id, text=buffer.strip(), index=sentence_idx),
         )
         sentence_idx += 1
 
@@ -328,7 +344,20 @@ async def tts_task(state: SessionPipelineState, audio_executor) -> None:
                 )
             safe_put_nowait(
                 state.ws_event_queue,
-                make_event(state, "turn_complete", turn_id=msg.turn_id, llm_latency_ms=msg.llm_latency_ms),
+                make_event(state, "turn_ended", turn_id=msg.turn_id, llm_latency_ms=msg.llm_latency_ms),
+            )
+            logger.info("TURN_ENDED session=%s turn_id=%s llm_latency_ms=%s", state.session_id, msg.turn_id, msg.llm_latency_ms)
+            # Emit aggregated latencies for the completed turn
+            safe_put_nowait(
+                state.ws_event_queue,
+                make_event(
+                    state,
+                    "latencies",
+                    stt=msg.stt_latency_ms,
+                    llm=msg.llm_latency_ms,
+                    ttsFirstAudio=None,  # Tracked separately via response_audio event
+                    total=msg.total_turn_latency_ms,
+                ),
             )
             state.sentence_queue.task_done()
             continue
@@ -369,6 +398,7 @@ async def _synthesize_sentence(
                         latency_ms=int((time.perf_counter() - sentence_start_time) * 1000),
                     ),
                 )
+                logger.info("RESPONSE_AUDIO_FIRST session=%s turn_id=%s latency_ms=%s", state.session_id, msg.turn_id, int((time.perf_counter() - sentence_start_time) * 1000))
                 if msg.first_sentence and state.call_start_time is not None:
                     manager.start_ai_segment(
                         state.session_id,
@@ -385,40 +415,48 @@ async def _synthesize_sentence(
 
 async def ws_out_task(state: SessionPipelineState) -> None:
     while True:
-        event = None
-        try:
-            event = state.ws_event_queue.get_nowait()
-        except asyncio.QueueEmpty:
-            pass
+        # Drain all available events from ws_event_queue first
+        # (events are higher priority than audio - plan §9)
+        event_drained = False
+        while True:
+            try:
+                event = state.ws_event_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
 
-        if event is None:
+            if event.get("type") == "disconnect":
+                return
+            if event.get("type") == "stop_call":
+                try:
+                    await state.websocket.close()
+                except Exception:
+                    pass
+                return
+
             try:
-                audio_chunk = await asyncio.wait_for(
-                    state.audio_out_queue.get(), timeout=0.05
-                )
-            except asyncio.TimeoutError:
-                continue
-            if audio_chunk is None:
-                break
-            try:
-                await state.websocket.send_bytes(audio_chunk)
+                await state.websocket.send_json(event)
+                event_drained = True
             except Exception:
-                safe_put_nowait(state.control_queue, {"type": "disconnect"})
-                break
+                return
+
+        if event_drained:
+            # Yield to event loop after sending events, then check for more
+            await asyncio.sleep(0)
             continue
 
-        if event.get("type") == "disconnect":
-            break
-        if event.get("type") == "stop_call":
-            try:
-                await state.websocket.close()
-            except Exception:
-                pass
-            break
-
+        # No events available - wait for audio
         try:
-            await state.websocket.send_json(event)
+            audio_chunk = await asyncio.wait_for(
+                state.audio_out_queue.get(), timeout=0.05
+            )
+        except asyncio.TimeoutError:
+            continue
+        if audio_chunk is None:
+            break
+        try:
+            await state.websocket.send_bytes(audio_chunk)
         except Exception:
+            safe_put_nowait(state.control_queue, {"type": "disconnect"})
             break
 
 
@@ -451,3 +489,4 @@ async def supervisor_task(state: SessionPipelineState) -> None:
             state.is_speaking = False
             safe_put_nowait(state.ws_event_queue, make_event(state, "turn_ended", reason="interrupted"))
             safe_put_nowait(state.ws_event_queue, make_event(state, "status", message="idle"))
+            logger.info("STATUS_IDLE session=%s reason=supervisor_barge_in", state.session_id)

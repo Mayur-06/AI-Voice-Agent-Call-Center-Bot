@@ -4,6 +4,7 @@ import re
 
 from edge_tts import Communicate
 from app.models.database import get_supabase, run_supabase
+from app.services.audio_processor import convert_to_wav
 
 logger = logging.getLogger(__name__)
 
@@ -46,13 +47,20 @@ async def synthesize_speech(text: str, voice_id: str) -> bytes:
     audio_buffer = io.BytesIO()
     async for chunk in _stream_audio_chunks(communicate):
         audio_buffer.write(chunk)
-    return audio_buffer.getvalue()
+    mp3_bytes = audio_buffer.getvalue()
+    # Convert complete MP3 to WAV for reliable browser decoding
+    return convert_to_wav(mp3_bytes)
 
 
 async def synthesize_speech_stream(text: str, voice_id: str):
     communicate = Communicate(text=text, voice=voice_id)
+    audio_buffer = io.BytesIO()
     async for chunk in _stream_audio_chunks(communicate):
-        yield chunk
+        audio_buffer.write(chunk)
+    mp3_bytes = audio_buffer.getvalue()
+    # Convert complete MP3 to WAV for reliable browser decoding
+    wav_bytes = convert_to_wav(mp3_bytes)
+    yield wav_bytes
 
 
 async def _stream_audio_chunks(communicate):
