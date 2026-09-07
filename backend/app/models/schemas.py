@@ -73,7 +73,8 @@ class Voice(BaseModel):
 
 class Document(BaseModel):
     id: str
-    session_id: str
+    session_id: Optional[str] = None
+    persona_id: str
     filename: str
     file_type: str
     storage_path: str

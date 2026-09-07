@@ -84,21 +84,22 @@ async def _upsert_pinecone(vectors: list[dict], batch_size: int = 100):
         await loop.run_in_executor(None, _upsert_batch, batch)
 
 
-async def store_chunks_in_pinecone(document_id: str, session_id: Optional[str], chunks: list[str], embeddings: list[list[float]], filename: str = ""):
+async def store_chunks_in_pinecone(document_id: str, chunks: list[str], embeddings: list[list[float]], filename: str = "", persona_id: Optional[str] = None):
     if not chunks:
         return
     vectors = []
     for i, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
+        metadata = {
+            "document_id": str(document_id),
+            "chunk_index": i,
+            "text": chunk,
+            "filename": filename,
+            "persona_id": str(persona_id) if persona_id else "",
+        }
         vectors.append({
             "id": f"{document_id}_{i}",
             "values": embedding,
-            "metadata": {
-                "document_id": str(document_id),
-                "chunk_index": i,
-                "text": chunk,
-                "filename": filename,
-                **({"session_id": str(session_id)} if session_id else {}),
-            },
+            "metadata": metadata,
         })
 
     await _upsert_pinecone(vectors)
@@ -127,26 +128,21 @@ async def _query_pinecone(query_embedding: list[float], top_k: int, filter_dict:
     return chunks
 
 
-async def retrieve_relevant_chunks(query: str, top_k: int = 3, session_id: Optional[str] = None, document_id: Optional[str] = None) -> list[tuple[str, str]]:
+async def retrieve_relevant_chunks(query: str, top_k: int = 3, persona_id: Optional[str] = None) -> list[tuple[str, str]]:
     import asyncio
     loop = asyncio.get_running_loop()
     query_embedding = await loop.run_in_executor(None, _encode_query, query)
 
-    filter_dict = {}
-    if document_id:
-        filter_dict["document_id"] = {"$eq": str(document_id)}
-    elif session_id:
-        filter_dict["session_id"] = {"$eq": str(session_id)}
+    if not persona_id:
+        logger.warning("RAG query attempted without persona_id")
+        return []
 
-    chunks = await _query_pinecone(query_embedding, top_k, filter_dict if filter_dict else None)
-    if not chunks and session_id:
-        logger.info("RAG fallback: no chunks for session %s, retrying without filter", session_id)
-        chunks = await _query_pinecone(query_embedding, top_k, None)
-        logger.info("RAG fallback result for session %s: %s chunks", session_id, len(chunks))
+    filter_dict = {"persona_id": {"$eq": str(persona_id)}}
+    chunks = await _query_pinecone(query_embedding, top_k, filter_dict)
     return chunks
 
 
-async def index_document(document_id: str, chunks: list[str], session_id: Optional[str] = None, filename: str = ""):
+async def index_document(document_id: str, chunks: list[str], filename: str = "", persona_id: Optional[str] = None):
     if not chunks:
         return
     import asyncio
@@ -162,13 +158,13 @@ async def index_document(document_id: str, chunks: list[str], session_id: Option
             "document_id": str(document_id),
             "chunk_text": chunk,
             "embedding_id": f"{document_id}_{i}",
-            "metadata": {"chunk_index": i, "session_id": str(session_id) if session_id else None, "filename": filename},
+            "metadata": {"chunk_index": i, "filename": filename, "persona_id": str(persona_id) if persona_id else None},
         })
 
     if metadata_list:
         await loop.run_in_executor(None, lambda: supabase.table("document_chunks").insert(metadata_list).execute())
 
-    await store_chunks_in_pinecone(document_id, session_id, chunks, embeddings, filename)
+    await store_chunks_in_pinecone(document_id, chunks, embeddings, filename, persona_id)
 
     try:
         await loop.run_in_executor(

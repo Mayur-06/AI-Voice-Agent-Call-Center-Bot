@@ -131,7 +131,6 @@ async def vad_stt_task(state: SessionPipelineState, audio_executor) -> None:
             state.audio_in_queue.task_done()
             safe_put_nowait(state.ws_event_queue, make_event(state, "error", message="stt_timeout"))
             continue
-
         stt_latency_ms = int((time.perf_counter() - stt_start) * 1000)
         logger.info("STT_RESULT session=%s text=%r latency_ms=%s", state.session_id, user_text, stt_latency_ms)
 
@@ -139,7 +138,7 @@ async def vad_stt_task(state: SessionPipelineState, audio_executor) -> None:
             state.audio_in_queue.task_done()
             safe_put_nowait(
                 state.ws_event_queue,
-                make_event(state, "status", message="empty_transcript", stt_latency_ms=stt_latency_ms),
+                make_event(state, "error", message="empty_transcript", stt_latency_ms=stt_latency_ms),
             )
             continue
 
@@ -217,7 +216,7 @@ async def _run_llm_turn(
     context = []
     if requires_rag(msg.text):
         try:
-            context = await retrieve_relevant_chunks(msg.text, session_id=state.db_session_id)
+            context = await retrieve_relevant_chunks(msg.text, persona_id=state.persona_id)
         except Exception:
             pass
 

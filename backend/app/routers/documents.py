@@ -12,17 +12,23 @@ router = APIRouter(prefix="/api/documents", tags=["documents"])
 
 
 @router.get("")
-async def list_documents():
+async def list_documents(persona_id: str = Query(...)):
     supabase = get_supabase()
-    res = supabase.table("documents").select("*").order("uploaded_at", desc=True).execute()
+    res = supabase.table("documents").select("*").eq("persona_id", persona_id).order("uploaded_at", desc=True).execute()
     return res.data or []
 
 
 @router.post("/upload")
 async def upload_document(
     files: List[UploadFile] = File(...),
-    session_id: str = Query(None),
+    persona_id: str = Query(...),
 ):
+    # Validate persona_id exists
+    supabase = get_supabase()
+    persona_check = supabase.table("personas").select("id").eq("id", persona_id).execute()
+    if not persona_check.data:
+        raise HTTPException(status_code=404, detail="Persona not found")
+    
     ensure_documents_bucket()
     uploaded = []
 
@@ -58,10 +64,10 @@ async def upload_document(
         doc_id = str(uuid.uuid4())
         storage_path = await upload_document_to_storage(content_bytes, filename, file_type)
 
-        supabase = get_supabase()
         insert_res = supabase.table("documents").insert({
             "id": doc_id,
-            "session_id": session_id,
+            "session_id": None,
+            "persona_id": persona_id,
             "filename": filename,
             "file_type": file_type,
             "storage_path": storage_path,
@@ -69,11 +75,12 @@ async def upload_document(
             "uploaded_at": datetime.now(timezone.utc).isoformat(),
         }).execute()
 
-        await index_document(doc_id, chunks, session_id, filename=filename)
+        await index_document(doc_id, chunks, filename=filename, persona_id=persona_id)
 
         inserted = insert_res.data[0] if isinstance(insert_res.data, list) and insert_res.data else {}
         uploaded.append({
             "id": inserted.get("id", doc_id),
+            "persona_id": inserted.get("persona_id", persona_id),
             "filename": inserted.get("filename", filename),
             "file_type": inserted.get("file_type", file_type),
             "storage_path": inserted.get("storage_path", storage_path),
