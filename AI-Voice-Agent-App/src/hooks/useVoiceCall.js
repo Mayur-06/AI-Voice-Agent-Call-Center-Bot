@@ -3,6 +3,8 @@ import { WS_URL, AUDIO_CHUNK_INTERVAL_MS, API_BASE } from '@/store/callStore';
 import useCallStore from '@/store/callStore';
 
 const TARGET_SAMPLE_RATE = 16000;
+// Silero VAD requires exactly 512 samples (1024 bytes) per frame at 16kHz
+const VAD_FRAME_BYTES = 1024;
 
 function downMixAndResample(inputBuffer, outputSampleRate) {
   const inputSampleRate = inputBuffer.sampleRate;
@@ -206,10 +208,6 @@ export function useVoiceCall() {
     }
   }, [addTranscriptEntry, setStatus, updateLastTranscriptEntry]);
 
-  const handleServerPartialTranscript = useCallback((msg) => {
-    updateLastTranscriptEntry({ role: 'user', text: msg.text, isPartial: true });
-  }, [updateLastTranscriptEntry]);
-
   const handleServerResponseAudio = useCallback((data) => {
     const ctx = audioContext || ttsCtxRef.current;
     if (!ctx) {
@@ -224,41 +222,15 @@ export function useVoiceCall() {
     }
 
     const targetCtx = audioContext || ttsCtxRef.current;
+    // Backend now sends WAV per sentence - decodeAudioData will work reliably
     targetCtx.decodeAudioData(data.slice(0), (buffer) => {
       ttsQueueRef.current.push(buffer);
       if (!isPlayingTtsRef.current) {
         playNextTtsChunkRef.current();
       }
-    }, () => {
-      const blob = new Blob([data], { type: 'audio/mpeg' });
-      const url = URL.createObjectURL(blob);
-      const audio = new Audio(url);
-      audio.onended = () => {
-        URL.revokeObjectURL(url);
-        if (isPlayingTtsRef.current) {
-          isPlayingTtsRef.current = false;
-          currentTtsSourceRef.current = null;
-          setStatus('idle');
-        }
-        playNextTtsChunkRef.current();
-      };
-      audio.onerror = () => {
-        URL.revokeObjectURL(url);
-        if (isPlayingTtsRef.current) {
-          isPlayingTtsRef.current = false;
-          currentTtsSourceRef.current = null;
-          setStatus('idle');
-        }
-        playNextTtsChunkRef.current();
-      };
-      isPlayingTtsRef.current = true;
-      setStatus('speaking');
-      audio.play().catch(() => {
-        URL.revokeObjectURL(url);
-        isPlayingTtsRef.current = false;
-        setStatus('idle');
-        playNextTtsChunkRef.current();
-      });
+    }, (err) => {
+      console.error('decodeAudioData failed (backend should send WAV):', err);
+      // No fallback - backend fix ensures WAV is sent
     });
   }, [audioContext, setStatus, setAudioContext]);
 
@@ -275,11 +247,6 @@ export function useVoiceCall() {
     }
   }, [setStatus]);
 
-  const handleServerSentenceEnd = useCallback((msg) => {
-    const text = msg.text;
-    addTranscriptEntry({ role: 'assistant', text, isPartial: false });
-  }, [addTranscriptEntry]);
-
   const handleServerFiller = useCallback((msg) => {
     const text = msg.text;
     setFiller(text);
@@ -294,37 +261,29 @@ export function useVoiceCall() {
           case 'status':
             handleServerStatus(msg);
             break;
-          case 'transcript':
+          case 'transcript_final':
             handleServerTranscript(msg);
             break;
-          case 'response_ready':
-            if (!msg.role || msg.role === 'assistant') {
-              const currentTranscript = useCallStore.getState().transcript;
-              const last = currentTranscript[currentTranscript.length - 1];
-              const text = msg.text;
-              if (!last || last.role !== 'assistant' || last.text !== text) {
-                addTranscriptEntry({ role: 'assistant', text });
-              }
-            }
-            setStatus('idle');
+          case 'turn_started':
+            setStatus('processing');
+            setRagActive(false);
+            setFiller(null);
             break;
-          case 'partial_transcript':
-            handleServerPartialTranscript(msg);
-            break;
-          case 'response_text':
-            addTranscriptEntry({ role: 'assistant', text: msg.text });
+          case 'turn_ended':
+            // Don't stop playback - let audio finish naturally
+            // stopTtsPlayback() would cut off remaining queued audio
             setStatus('idle');
+            setRagActive(false);
+            setFiller(null);
             break;
           case 'response_audio':
-            if (!(event.data instanceof Blob) && event.data instanceof ArrayBuffer) {
-              handleServerResponseAudio(event.data);
+            // Metadata event for TTS first audio latency - actual audio comes as binary messages
+            if (msg.latency_ms !== undefined) {
+              setLatencies(prev => ({ ...prev, ttsFirstAudio: msg.latency_ms }));
             }
             break;
           case 'sentiment':
             handleServerSentiment(msg);
-            break;
-          case 'sentence_end':
-            handleServerSentenceEnd(msg);
             break;
           case 'filler':
             handleServerFiller(msg);
@@ -358,15 +317,16 @@ export function useVoiceCall() {
   }, [
     handleServerStatus,
     handleServerTranscript,
-    handleServerPartialTranscript,
     handleServerResponseAudio,
     handleServerError,
     handleServerSentiment,
-    handleServerSentenceEnd,
     handleServerFiller,
     addTranscriptEntry,
     updateLastTranscriptEntry,
     setStatus,
+    setRagActive,
+    setFiller,
+    stopTtsPlayback,
     setLatencies,
   ]);
 
@@ -386,14 +346,7 @@ export function useVoiceCall() {
           setConnectionStatus('connected');
           reconnectAttemptsRef.current = 0;
 
-          const authPayload = {
-            type: 'auth',
-            session_id: sessionId,
-            persona_id: selectedPersona,
-            voice_id: selectedVoiceId,
-          };
-          ws.send(JSON.stringify(authPayload));
-
+          ws.send(JSON.stringify({ type: 'start_call', session_id: sessionId }));
           ws.send(JSON.stringify({ type: 'ping', session_id: sessionId }));
           resolve();
         };
@@ -425,7 +378,7 @@ export function useVoiceCall() {
         reject(error);
       }
     });
-  }, [selectedPersona, selectedVoiceId, setConnectionStatus, stopTtsPlayback, setStatus, handleServerMessage]);
+  }, [setConnectionStatus, stopTtsPlayback, setStatus, handleServerMessage]);
 
   const startMicCapture = useCallback(async () => {
     if (capturingRef.current) return false;
@@ -446,6 +399,9 @@ export function useVoiceCall() {
 
       const AudioContextClass = window.AudioContext || window.webkitAudioContext;
       const audioContext = new AudioContextClass({ sampleRate: TARGET_SAMPLE_RATE });
+      if (audioContext.state === 'suspended') {
+        await audioContext.resume();
+      }
       setAudioContext(audioContext);
       ttsCtxRef.current = audioContext;
 
@@ -479,9 +435,15 @@ export function useVoiceCall() {
         }
         chunks.length = 0;
 
+        // Split into VAD frame sized chunks (1024 bytes = 512 samples at 16kHz)
         const currentWs = wsRef.current;
         if (currentWs && currentWs.readyState === WebSocket.OPEN) {
-          currentWs.send(encodePcmChunk(combined));
+          for (let i = 0; i < combined.length; i += VAD_FRAME_BYTES / 2) {
+            const frame = combined.subarray(i, i + VAD_FRAME_BYTES / 2);
+            if (frame.length === VAD_FRAME_BYTES / 2) {
+              currentWs.send(encodePcmChunk(frame));
+            }
+          }
         }
       }, AUDIO_CHUNK_INTERVAL_MS);
 

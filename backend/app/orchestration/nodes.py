@@ -310,7 +310,7 @@ async def index_node(state: dict) -> dict:
 
     try:
         from app.services.rag import store_chunks_in_pinecone
-        await store_chunks_in_pinecone(document_id, None, chunks, embeddings)
+        await store_chunks_in_pinecone(document_id, chunks, embeddings, persona_id=state.get("persona_id"))
         return {**state, "status": "indexed"}
     except Exception as exc:
         return {**state, "error": f"Indexing failed: {exc}", "status": "error"}

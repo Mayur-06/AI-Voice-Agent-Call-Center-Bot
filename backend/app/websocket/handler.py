@@ -130,6 +130,7 @@ async def _handle_voice_pipeline_v2(websocket: WebSocket, session_id: str) -> No
 
     pipeline = FiveQueuePipeline(
         audio_executor=websocket.app.state.audio_executor,
+        vad_executor=websocket.app.state.vad_executor,
         embedding_executor=websocket.app.state.embedding_executor,
     )
     pipeline.start_pipeline(state)
@@ -144,6 +145,7 @@ async def _handle_voice_pipeline_v2(websocket: WebSocket, session_id: str) -> No
             if event.get("type") == "start_call":
                 if state.call_start_time is None:
                     state.call_start_time = time.perf_counter()
+                logger.info("HANDLER_START_CALL session=%s call_started=%s call_start_time=%s", state.session_id, state.call_started, state.call_start_time)
             elif event.get("type") == "voice_select":
                 data = event["data"]
                 state.voice_id = data.get("voice_id") or state.voice_id
@@ -151,6 +153,7 @@ async def _handle_voice_pipeline_v2(websocket: WebSocket, session_id: str) -> No
             elif event.get("type") == "cancel_turn":
                 await pipeline.handle_barge_in(state)
             elif event.get("type") == "force_stt":
+                logger.info("FORCE_STT_RECEIVED session=%s call_started=%s", state.session_id, state.call_started)
                 await pipeline.handle_barge_in(state)
                 vad_instance = state.vad
                 audio_data = await asyncio.get_running_loop().run_in_executor(
@@ -170,6 +173,7 @@ async def _handle_voice_pipeline_v2(websocket: WebSocket, session_id: str) -> No
                     safe_put_nowait(state.ws_event_queue, make_event(state, "status", message="idle"))
                     continue
                 stt_latency_ms = int((time.perf_counter() - stt_start) * 1000)
+                logger.info("FORCE_STT_TRANSCRIPTION session=%s text=%r latency_ms=%s", state.session_id, user_text, stt_latency_ms)
                 if not user_text or is_noisy_transcription(user_text):
                     safe_put_nowait(state.ws_event_queue, make_event(state, "error", message="empty_transcript"))
                     safe_put_nowait(state.ws_event_queue, make_event(state, "status", message="idle"))

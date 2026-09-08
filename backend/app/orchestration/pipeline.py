@@ -106,8 +106,9 @@ class SessionPipelineState:
 
 
 class FiveQueuePipeline:
-    def __init__(self, audio_executor, embedding_executor):
+    def __init__(self, audio_executor, vad_executor, embedding_executor):
         self.audio_executor = audio_executor
+        self.vad_executor = vad_executor
         self.embedding_executor = embedding_executor
 
     def start_pipeline(self, state: SessionPipelineState) -> None:
@@ -120,7 +121,7 @@ class FiveQueuePipeline:
             supervisor_task,
         )
         state.ws_in_task = asyncio.create_task(ws_in_task(state))
-        state.vad_stt_task = asyncio.create_task(vad_stt_task(state, self.audio_executor))
+        state.vad_stt_task = asyncio.create_task(vad_stt_task(state, self.vad_executor))
         state.rag_llm_task = asyncio.create_task(rag_llm_task(state, self.embedding_executor))
         state.tts_task = asyncio.create_task(tts_task(state, self.audio_executor))
         state.ws_out_task = asyncio.create_task(ws_out_task(state))
@@ -180,3 +181,4 @@ class FiveQueuePipeline:
         state.is_speaking = False
         safe_put_nowait(state.ws_event_queue, make_event(state, "turn_ended", reason="interrupted"))
         safe_put_nowait(state.ws_event_queue, make_event(state, "status", message="idle"))
+        logger.info("STATUS_IDLE session=%s reason=interrupted", state.session_id)
