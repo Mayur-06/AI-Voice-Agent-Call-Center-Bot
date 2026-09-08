@@ -30,7 +30,7 @@ The four supplied designs should be implemented as one cohesive product, not as 
 |---|---|---|---|
 |Ink Black|#03191e|Primary text, icons,<br>controls, charts|Default high-contrast UI<br>color|
 |Pearl Beige|#ebe1c1|Accent, selected states,<br>ambient highlights|Use sparingly; never let it<br>overpower content|
-|Ghost White|#fbfbf|Main canvas, light surfaces|Base background and<br>spacious breathing room|
+|Ghost White|#fbfbff|Main canvas, light surfaces|Base background and<br>spacious breathing room|
 
 
 
@@ -380,5 +380,56 @@ Page 7
 
 - Confirm no component uses a bespoke, undocumented box-shadow outside the defined tokens. 
 
-Page 8 
-
+---
+ 
+## Implementation Notes — Custom & Gap Areas
+ 
+Five areas required by the design plan that fall outside shadcn's out-of-the-box
+components, or need explicit configuration guidance.
+ 
+### 1. AuraVisualizer / VoiceWaveform (custom build)
+ 
+- Not a shadcn component — shadcn has no audio/waveform primitive. Build as a standalone component in `components/voice/`, not under `components/ui/` (keep it separate from shadcn-generated files so `shadcn add` updates never touch it).
+- Two sub-parts:
+  - `AuraVisualizer` — the central orb/ring, driven by discrete states (idle, listening, speaking, thinking, muted) from plan section 4. Implement as CSS/SVG with state-driven class swaps, not a continuous animation loop, so each state has a defined visual rather than an interpolated one.
+  - `VoiceWaveform` — real-time amplitude bars/ring driven by live audio data (Web Audio API `AnalyserNode` → amplitude array → mapped to bar heights or ring radius).
+- Color usage: idle = Ink Black at rest opacity, listening/speaking = Pearl Beige accent pulse, muted = reduced-opacity Ink Black per plan section 4's "reduced visual intensity" rule.
+- Concentricity: waveform ring and central orb must share the same computed center — build both from one parent container with `position: relative` / centered absolute children, not independently positioned elements (ties to QA section 12.5).
+- Expose the current state as a prop (`state: "idle" | "listening" | "speaking" | "thinking" | "muted"`) so CallControls (Toggle) and ConnectionIndicator (Badge) can stay in sync with it — same pattern as the Toggle + Badge pairing above.
+### 2. FileDropzone (custom build, shadcn-assisted shell)
+ 
+- No dedicated shadcn dropzone component. Build the interactive drag/drop logic custom (native HTML5 drag events or a lightweight library), but compose the visual shell from existing shadcn primitives:
+  - Outer container → `Card` (dashed border via custom class, not a shadcn variant)
+  - Uploaded file row → `Card` (compact) or plain flex row with `Badge` for file type/size
+  - Remove action → `Button` (ghost, icon) wrapped in `AlertDialog` per the pairing guideline above if confirmation is desired
+- Empty state (no files) vs. populated state (file list) should be two explicit render branches, not one component silently resizing — keeps it consistent with the plan's "explicit states, not implied" rule (section 4, echoed in QA section 12.6).
+### 3. Chart variants — correct chart type per data shape
+ 
+The base `ChartLineDefault` pattern only fits time-series line data. Map each chart to the Recharts primitive that actually matches its data shape, while keeping the same `ChartContainer` / `ChartTooltip` / `chartConfig` wrapper pattern for visual consistency:
+ 
+- **SentimentChart** (Screen 03 sentiment/engagement flow, Screen 04 30-day sentiment index) → `LineChart` is correct as-is; sentiment over time is a continuous time series.
+- **TopicChart** (Screen 04 topic frequency) → should be a `BarChart` (import from `recharts`, same `ChartContainer` wrapper), not `LineChart` — topics are categorical, not sequential. Use horizontal bars if topic labels are long.
+- **LatencyChart** (Screen 04 turn latency & stream jitter) → `LineChart` is appropriate (latency over time), but needs multiple `Line` series (edge handshake, relay buffer, SLA/target) rather than the single-series example — use `chartConfig` with one entry per series, each mapped to a distinct token color.
+- Rule going forward: before reusing the base pattern, check whether the data is continuous/time-based (→ Line) or categorical (→ Bar) rather than defaulting to Line for everything.
+### 4. Motion tokens — reduced-motion handling
+ 
+shadcn components ship without built-in reduced-motion logic — this must be added at the app level, not per-component:
+ 
+- Add a single CSS media query in the global stylesheet: `@media (prefers-reduced-motion: reduce)` that disables/shortens transitions and animations globally (Tailwind: `motion-reduce:` variant works directly on any className, e.g. `motion-reduce:transition-none`).
+- For `AuraVisualizer`/`VoiceWaveform` specifically: read `window.matchMedia("(prefers-reduced-motion: reduce)")` in the component and swap the continuous pulse/ripple animation for a static state indicator (e.g. solid ring instead of animated pulse) when true — this is custom logic since it's a custom component.
+- For Chart animations: Recharts elements (`Line`, `Bar`) accept `isAnimationActive` — set it to `false` when reduced motion is preferred, rather than trying to shorten the animation duration.
+- Centralize the check in one hook (e.g. `useReducedMotion()`) and consume it in both AuraVisualizer and the chart wrapper components, rather than duplicating the media query.
+### 5. Shadow tokens — CSS variable configuration
+ 
+shadcn's default theme ships a single implicit shadow scale; the plan's requirement for distinct per-elevation tokens (card / modal-overlay / dropdown, from QA section 12.7) needs explicit variables added to the theme layer:
+ 
+- Define custom CSS variables alongside the existing color tokens (in `globals.css`, `:root` block):
+```css
+  --shadow-card: 0 8px 30px rgba(3, 25, 30, 0.06);
+  --shadow-overlay: 0 16px 48px rgba(3, 25, 30, 0.12);
+  --shadow-dropdown: 0 4px 16px rgba(3, 25, 30, 0.08);
+```
+- Map them in `tailwind.config.js` under `boxShadow`: `card`, `overlay`, `dropdown` — so components use `shadow-card`, `shadow-overlay`, `shadow-dropdown` utility classes instead of arbitrary values.
+- Apply per component: `Card`/`MetricCard`/`PersonaCard` → `shadow-card`; `AlertDialogContent`/`Dialog` overlays → `shadow-overlay`; `DropdownMenuContent`, `TooltipContent` → `shadow-dropdown`.
+- This directly closes the QA gap flagged earlier ("only one shadow/elevation value defined") by giving each elevation level its own named token instead of one shared value.
+---

@@ -51,6 +51,7 @@ async def upload_document(
                 import io
                 reader = PdfReader(io.BytesIO(content_bytes))
                 text = "\n".join(page.extract_text() or "" for page in reader.pages)
+                page_count = len(reader.pages)
             except Exception as exc:
                 raise HTTPException(status_code=400, detail=f"Failed to extract text from PDF {filename}: {exc}")
         else:
@@ -58,6 +59,7 @@ async def upload_document(
                 text = content_bytes.decode("utf-8")
             except Exception as exc:
                 raise HTTPException(status_code=400, detail=f"Failed to decode file {filename}: {exc}")
+            page_count = None
 
         text = _sanitize_text(text)
 
@@ -87,9 +89,11 @@ async def upload_document(
         uploaded.append({
             "id": inserted.get("id", doc_id),
             "persona_id": inserted.get("persona_id", resolved_persona_id),
-            "filename": inserted.get("filename", filename),
-            "file_type": inserted.get("file_type", file_type),
-            "storage_path": inserted.get("storage_path", storage_path),
+            "filename": filename,
+            "file_type": file_type,
+            "storage_path": storage_path,
+            "file_size": len(content_bytes),
+            "page_count": page_count,
             "chunks_count": len(chunks),
             "status": "indexed",
             "uploaded_at": inserted.get("uploaded_at", datetime.now(timezone.utc).isoformat()),

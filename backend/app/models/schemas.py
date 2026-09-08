@@ -33,6 +33,8 @@ class Session(BaseModel):
     ended_at: Optional[datetime] = None
     duration: Optional[float] = None
     selected_voice: Optional[str] = None
+    persona_name: Optional[str] = None
+    selected_voice_name: Optional[str] = None
 
 
 class SessionCreate(BaseModel):
@@ -77,6 +79,8 @@ class Document(BaseModel):
     filename: str
     file_type: str
     storage_path: str
+    file_size: Optional[int] = None
+    page_count: Optional[int] = None
     status: str
     uploaded_at: datetime
 

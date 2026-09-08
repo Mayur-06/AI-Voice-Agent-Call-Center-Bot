@@ -99,6 +99,8 @@ class Document(Base):
     filename = Column(String, nullable=False)
     file_type = Column(String, nullable=False)
     storage_path = Column(String, nullable=False)
+    file_size = Column(BigInteger)
+    page_count = Column(Integer)
     status = Column(String, nullable=False, server_default=sa_text("'uploaded'"))
     uploaded_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 

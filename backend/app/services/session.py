@@ -3,10 +3,10 @@ from datetime import datetime, timezone
 from app.models.database import get_supabase, run_supabase
 
 _PERSONA_SLUG_MAP = {
-    "customer-support": "Customer Support",
-    "technical-expert": "Technical Expert",
-    "sales-assistant": "Sales Assistant",
-    "general-assistant": "General Assistant",
+    "neha": "Neha",
+    "alena": "Alena",
+    "sora": "Sora",
+    "aria": "Aria",
 }
 
 

@@ -208,7 +208,7 @@ export function ChartLineDefault() {
 
 **Notes**
 - Map `--chart-1` etc. to the palette tokens (Ink Black / Pearl Beige) rather than default shadcn chart colors, to satisfy "no decorative gradients or excessive legends" rule (plan section 6)
-- SentimentChart, TopicChart, LatencyChart reuse this same base pattern with different `dataKey`/`chartConfig`
+- SentimentChart, BarChart, LatencyChart reuse this same base pattern with different `dataKey`/`chartConfig`
 
 ---
 

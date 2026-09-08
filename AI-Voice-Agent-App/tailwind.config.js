@@ -4,7 +4,13 @@ import tailwindcssAnimate from 'tailwindcss-animate'
 export default {
   content: ['./index.html', './src/**/*.{js,jsx}'],
   theme: {
-    extend: {},
+    extend: {
+      boxShadow: {
+        card: 'var(--shadow-card)',
+        overlay: 'var(--shadow-overlay)',
+        dropdown: 'var(--shadow-dropdown)',
+      },
+    },
   },
   plugins: [tailwindcssAnimate],
 }
