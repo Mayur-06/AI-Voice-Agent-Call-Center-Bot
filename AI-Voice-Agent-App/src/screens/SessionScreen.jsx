@@ -190,9 +190,7 @@ export default function SessionScreen() {
 
     try {
       const url = new URL(`${API_BASE}/api/documents/upload`);
-      if (sessionId) {
-        url.searchParams.set('session_id', sessionId);
-      }
+      url.searchParams.set('persona_id', selectedPersona);
       const res = await fetch(url.toString(), {
         method: 'POST',
         body: formData,
@@ -209,7 +207,7 @@ export default function SessionScreen() {
         fileInputRef.current.value = '';
       }
     }
-  }, [setUploadedDocuments]);
+  }, [setUploadedDocuments, selectedPersona]);
 
   const onDragEnter = useCallback((e) => {
     e.preventDefault();
