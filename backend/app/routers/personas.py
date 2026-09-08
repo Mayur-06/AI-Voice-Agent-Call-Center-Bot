@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException, status
-from app.models.database import get_supabase
+from app.models.database import get_supabase, run_supabase
 from app.models.schemas import PersonaCreate, Persona
 from typing import List
 import uuid
@@ -9,28 +9,32 @@ router = APIRouter(prefix="/api/personas", tags=["personas"])
 
 _DEFAULT_PERSONAS = [
     {
-        "name": "Customer Support",
+        "name": "Neha",
         "description": "Empathetic, patient and solution-oriented support agent.",
         "system_prompt": "You are a warm, patient customer support agent. Prioritize empathy, clarity and resolution. Keep responses conversational and actionable. When uncertain, offer the next best step rather than guessing.",
         "domain": "support",
+        "avatar_url": "https://res.cloudinary.com/ejpx0qht/image/upload/v1788858004/aura-avatars/neha.png",
     },
     {
-        "name": "Technical Expert",
+        "name": "Alena",
         "description": "Precise, knowledgeable technical advisor.",
         "system_prompt": "You are a precise technical expert. Answer with accurate, step-by-step guidance. Use concise technical language, define terms when needed, and provide troubleshooting paths that the user can follow immediately.",
         "domain": "technical",
+        "avatar_url": "https://res.cloudinary.com/ejpx0qht/image/upload/v1788858005/aura-avatars/alena.png",
     },
     {
-        "name": "Sales Assistant",
+        "name": "Sora",
         "description": "Friendly, persuasive sales assistant.",
         "system_prompt": "You are a friendly, persuasive sales assistant. Highlight benefits, match features to user needs, keep momentum, and make next steps easy. Avoid pushy language and stay concise.",
         "domain": "sales",
+        "avatar_url": "https://res.cloudinary.com/ejpx0qht/image/upload/v1788858006/aura-avatars/sora.png",
     },
     {
-        "name": "General Assistant",
+        "name": "Aria",
         "description": "Balanced, helpful general-purpose assistant.",
         "system_prompt": "You are a balanced, helpful general assistant. Adapt to the user's intent, keep answers useful and concise, and ask clarifying questions when needed. Be direct, organized and supportive.",
         "domain": "general",
+        "avatar_url": "https://res.cloudinary.com/ejpx0qht/image/upload/v1788858007/aura-avatars/aria.png",
     },
 ]
 
@@ -51,16 +55,14 @@ def _persona_row(payload: dict) -> dict:
 
 async def _ensure_personas():
     supabase = get_supabase()
-    try:
-        res = supabase.table("personas").select("id").limit(1).execute()
-        if res.data:
-            return
-    except Exception:
-        return
-
     rows = [_persona_row(p) for p in _DEFAULT_PERSONAS]
     try:
-        supabase.table("personas").insert(rows).execute()
+        for row in rows:
+            existing = await run_supabase(lambda: supabase.table("personas").select("id").eq("name", row["name"]).limit(1).execute())
+            if existing.data:
+                await run_supabase(lambda: supabase.table("personas").update(row).eq("id", existing.data[0]["id"]).execute())
+            else:
+                await run_supabase(lambda: supabase.table("personas").insert(row).execute())
     except Exception:
         pass
 

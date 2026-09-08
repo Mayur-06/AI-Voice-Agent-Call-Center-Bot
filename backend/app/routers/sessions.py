@@ -29,8 +29,30 @@ async def create_session_route(data: SessionCreate):
 @router.get("", response_model=List[Session])
 async def list_sessions():
     supabase = get_supabase()
-    res = supabase.table("sessions").select("*").order("started_at", desc=True).execute()
-    return [Session(**s) for s in (res.data or [])]
+    sessions_res = supabase.table("sessions").select("*").order("started_at", desc=True).execute()
+    sessions = sessions_res.data or []
+
+    persona_ids = [str(s.get("persona_id")) for s in sessions if s.get("persona_id")]
+    persona_map = {}
+    if persona_ids:
+        personas_res = supabase.table("personas").select("id, name").in_("id", persona_ids).execute()
+        for p in (personas_res.data or []):
+            persona_map[str(p["id"])] = p.get("name", "Unknown")
+
+    voice_ids = [s.get("selected_voice") for s in sessions if s.get("selected_voice")]
+    voice_map = {}
+    if voice_ids:
+        voices_res = supabase.table("voices").select("id, name").in_("voice_id", voice_ids).execute()
+        for v in (voices_res.data or []):
+            voice_map[str(v["voice_id"])] = v.get("name", "Unknown")
+
+    result = []
+    for s in sessions:
+        row = dict(s)
+        row["persona_name"] = persona_map.get(str(s.get("persona_id", "")), "Unknown")
+        row["selected_voice_name"] = voice_map.get(str(s.get("selected_voice", "")), "Unknown")
+        result.append(row)
+    return result
 
 
 @router.get("/{session_id}")
@@ -40,8 +62,26 @@ async def get_session_details(session_id: str):
     if not session_res.data:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
 
-    messages_res = supabase.table("messages").select("*").eq("session_id", session_id).order("sequence_number").execute()
     session = session_res.data[0]
+    persona_id = session.get("persona_id")
+    selected_voice = session.get("selected_voice")
+
+    persona_name = None
+    if persona_id:
+        persona_res = supabase.table("personas").select("name").eq("id", persona_id).limit(1).execute()
+        if persona_res.data:
+            persona_name = persona_res.data[0].get("name")
+
+    selected_voice_name = None
+    if selected_voice:
+        voice_res = supabase.table("voices").select("name").eq("voice_id", selected_voice).limit(1).execute()
+        if voice_res.data:
+            selected_voice_name = voice_res.data[0].get("name")
+
+    session["persona_name"] = persona_name
+    session["selected_voice_name"] = selected_voice_name
+
+    messages_res = supabase.table("messages").select("*").eq("session_id", session_id).order("sequence_number").execute()
     session["messages"] = messages_res.data or []
     return session
 

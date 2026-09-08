@@ -52,5 +52,14 @@ node_modules/
 .mypy_cache/
 .ruff_cache/
 
+# Backend local artifacts and generated files
+backend/voice_previews/
+backend/log/
+
+# Backend temporary scripts
+backend/debug_*.py
+backend/test_vad*.py
+backend/generate_voice_previews.py
+
 # Test
 backend/tests/

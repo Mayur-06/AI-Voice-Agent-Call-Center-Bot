@@ -95,11 +95,12 @@ class Document(Base):
     __tablename__ = "documents"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    session_id = Column(UUID(as_uuid=True), ForeignKey("sessions.id", ondelete="CASCADE"), nullable=True)
     persona_id = Column(UUID(as_uuid=True), ForeignKey("personas.id", ondelete="CASCADE"), nullable=False)
     filename = Column(String, nullable=False)
     file_type = Column(String, nullable=False)
     storage_path = Column(String, nullable=False)
+    file_size = Column(BigInteger)
+    page_count = Column(Integer)
     status = Column(String, nullable=False, server_default=sa_text("'uploaded'"))
     uploaded_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 

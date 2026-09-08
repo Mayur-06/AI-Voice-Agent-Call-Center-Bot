@@ -128,14 +128,10 @@ async def _query_pinecone(query_embedding: list[float], top_k: int, filter_dict:
     return chunks
 
 
-async def retrieve_relevant_chunks(query: str, top_k: int = 3, persona_id: Optional[str] = None) -> list[tuple[str, str]]:
+async def retrieve_relevant_chunks(query: str, persona_id: str, top_k: int = 3) -> list[tuple[str, str]]:
     import asyncio
     loop = asyncio.get_running_loop()
     query_embedding = await loop.run_in_executor(None, _encode_query, query)
-
-    if not persona_id:
-        logger.warning("RAG query attempted without persona_id")
-        return []
 
     filter_dict = {"persona_id": {"$eq": str(persona_id)}}
     chunks = await _query_pinecone(query_embedding, top_k, filter_dict)
@@ -147,6 +143,7 @@ async def index_document(document_id: str, chunks: list[str], filename: str = ""
         return
     import asyncio
     loop = asyncio.get_running_loop()
+    chunks = [chunk.replace("\x00", "") for chunk in chunks]
     embeddings = await loop.run_in_executor(None, generate_embeddings, chunks)
 
     supabase = get_supabase()
