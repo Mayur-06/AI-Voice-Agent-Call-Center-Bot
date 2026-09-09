@@ -56,6 +56,8 @@ class Session(Base):
     ended_at = Column(DateTime(timezone=True))
     duration = Column(Float)
     selected_voice = Column(String)
+    summary = Column(Text)
+    recording_url = Column(String)
 
     messages = relationship("Message", back_populates="session", order_by="Message.sequence_number")
 
@@ -140,6 +142,8 @@ class CallMetric(Base):
     agent_speaking_time = Column(Float, nullable=False)
     turn_count = Column(Integer, nullable=False)
     average_latency = Column(Float, nullable=False)
+    p95_latency = Column(Float)
+    stream_status = Column(String)
     sentiment_score = Column(Float)
     resolution_status = Column(String)
 
