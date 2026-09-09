@@ -204,7 +204,6 @@ export function useVoiceCall() {
       if (!last || last.role !== 'assistant' || last.text !== text) {
         addTranscriptEntry({ role: 'assistant', text });
       }
-      setStatus('idle');
     }
   }, [addTranscriptEntry, setStatus, updateLastTranscriptEntry]);
 
@@ -250,8 +249,7 @@ export function useVoiceCall() {
   const handleServerFiller = useCallback((msg) => {
     const text = msg.text;
     setFiller(text);
-    addTranscriptEntry({ role: 'assistant', text, isFiller: true });
-  }, [setFiller, addTranscriptEntry]);
+  }, [setFiller]);
 
   const handleServerMessage = useCallback((event) => {
     if (typeof event.data === 'string') {
@@ -386,22 +384,25 @@ export function useVoiceCall() {
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           channelCount: 1,
-          sampleRate: TARGET_SAMPLE_RATE,
           echoCancellation: true,
           noiseSuppression: true,
           autoGainControl: true,
         },
       });
 
+      const streamTracks = stream.getAudioTracks();
+      console.info('[voice] got mic stream; tracks=', streamTracks.length, 'readyState=', streamTracks[0] ? streamTracks[0].readyState : 'none');
+
       setMediaStream(stream);
       setStatus('listening');
       capturingRef.current = true;
 
       const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-      const audioContext = new AudioContextClass({ sampleRate: TARGET_SAMPLE_RATE });
+      const audioContext = new AudioContextClass();
       if (audioContext.state === 'suspended') {
         await audioContext.resume();
       }
+      console.info('[voice] AudioContext sampleRate=', audioContext.sampleRate, 'state=', audioContext.state);
       setAudioContext(audioContext);
       ttsCtxRef.current = audioContext;
 
@@ -413,11 +414,24 @@ export function useVoiceCall() {
       analyserRef.current = analyser;
 
       const chunks = [];
+      let processCount = 0;
 
       processorRef.current.onaudioprocess = (event) => {
-        if (mutedRef.current) return;
+        if (mutedRef.current) {
+          return;
+        }
+        const inputData = event.inputBuffer.getChannelData(0);
+        let maxAmplitude = 0;
+        for (let i = 0; i < inputData.length; i += 64) {
+          const abs = Math.abs(inputData[i] || 0);
+          if (abs > maxAmplitude) maxAmplitude = abs;
+        }
         const pcm = downMixAndResample(event.inputBuffer, TARGET_SAMPLE_RATE);
         chunks.push(pcm);
+        processCount += 1;
+        if (processCount % 20 === 0) {
+          console.info('[voice] onaudioprocess count=', processCount, 'chunkLen=', pcm.length, 'queuedChunks=', chunks.length, 'maxAmplitude=', maxAmplitude.toFixed(4));
+        }
       };
 
       source.connect(analyser);
@@ -425,7 +439,12 @@ export function useVoiceCall() {
       processorRef.current.connect(audioContext.destination);
 
       chunkIntervalRef.current = window.setInterval(() => {
-        if (chunks.length === 0 || mutedRef.current || !capturingRef.current) return;
+        if (chunks.length === 0 || mutedRef.current || !capturingRef.current) {
+          if (chunks.length === 0 && capturingRef.current && processCount > 0 && processCount % 20 === 0) {
+            console.warn('[voice] interval tick: no chunks queued despite onaudioprocess firing');
+          }
+          return;
+        }
         const totalLength = chunks.reduce((sum, c) => sum + c.length, 0);
         const combined = new Int16Array(totalLength);
         let offset = 0;
@@ -435,15 +454,26 @@ export function useVoiceCall() {
         }
         chunks.length = 0;
 
-        // Split into VAD frame sized chunks (1024 bytes = 512 samples at 16kHz)
         const currentWs = wsRef.current;
         if (currentWs && currentWs.readyState === WebSocket.OPEN) {
+          let sent = 0;
           for (let i = 0; i < combined.length; i += VAD_FRAME_BYTES / 2) {
             const frame = combined.subarray(i, i + VAD_FRAME_BYTES / 2);
             if (frame.length === VAD_FRAME_BYTES / 2) {
-              currentWs.send(encodePcmChunk(frame));
+              try {
+                currentWs.send(encodePcmChunk(frame));
+                sent += 1;
+              } catch (err) {
+                console.error('[voice] ws send failed', err);
+                break;
+              }
             }
           }
+          if (sent > 0) {
+            console.info('[voice] sent frames=', sent, 'bytes=', sent * VAD_FRAME_BYTES);
+          }
+        } else {
+          console.warn('[voice] ws not open; readyState=', currentWs ? currentWs.readyState : 'null');
         }
       }, AUDIO_CHUNK_INTERVAL_MS);
 
@@ -509,6 +539,13 @@ export function useVoiceCall() {
 
     try {
       await connectWebSocketRef.current(newSessionId);
+      if (!capturingRef.current) {
+        try {
+          await startMicCapture();
+        } catch {
+          // Mic access failed; error is surfaced via setError inside startMicCapture.
+        }
+      }
     } catch (error) {
       setError(error instanceof Error ? error.message : 'Failed to start call');
       setStatus('idle');
@@ -516,7 +553,7 @@ export function useVoiceCall() {
     } finally {
       connectingRef.current = false;
     }
-  }, [selectedPersona, selectedVoiceId, setSessionId, setStatus, setConnectionStatus, setTranscript, setError, setFiller, setLatencies]);
+  }, [selectedPersona, selectedVoiceId, setSessionId, setStatus, setConnectionStatus, setTranscript, setError, setFiller, setLatencies, startMicCapture]);
 
   const stopCall = useCallback(() => {
     connectingRef.current = false;
@@ -572,7 +609,7 @@ export function useVoiceCall() {
       try {
         ws.send(JSON.stringify({ type: 'stop_listening', session_id: sessionId }));
       } catch (e) {
-        console.error('Failed to send stop_listening:', e);
+        console.error('[voice] Failed to send stop_listening:', e);
       }
     }
 
@@ -602,10 +639,13 @@ export function useVoiceCall() {
   }, [sessionId, mediaStream, setMediaStream, stopTtsPlayback, setStatus]);
 
   const toggleCapture = useCallback(async () => {
+    console.info('[voice] toggleCapture invoked; capturing=', capturingRef.current, 'muted=', mutedRef.current);
     if (capturingRef.current) {
+      console.info('[voice] toggleCapture -> stopCapture');
       stopCapture();
       return;
     }
+    console.info('[voice] toggleCapture -> startMicCapture');
     const ok = await startMicCapture();
     if (!ok) {
       setError('Microphone access failed');
@@ -620,7 +660,7 @@ export function useVoiceCall() {
       setError('WebSocket is not connected');
       return;
     }
-    ws.send(JSON.stringify({ type: 'transcript', text: trimmed, session_id: sessionId }));
+    ws.send(JSON.stringify({ type: 'external_transcript', data: { text: trimmed }, session_id: sessionId }));
   }, [sessionId, setError]);
 
   const toggleMute = useCallback(() => {

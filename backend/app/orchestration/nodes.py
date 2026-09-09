@@ -87,6 +87,7 @@ async def summarizer_node(state: dict) -> dict:
         '- key_topics (list of strings)\n'
         '- decisions_made (list of strings)\n'
         '- action_items (list of strings)\n'
+        '- dialogue_flow (list of strings describing the ordered phases of the conversation, e.g. ["Introduction", "Problem discussion", "Solution agreement", "Wrap-up"])\n'
         '- resolution_status (string)\n'
         '- sentiment_overview (string)\n\n'
         f"Transcript:\n{transcript}\n\n"
@@ -101,7 +102,7 @@ async def summarizer_node(state: dict) -> dict:
             cleaned = re.sub(r"\n?```$", "", cleaned)
         parsed = json.loads(cleaned)
 
-        required = ["key_topics", "decisions_made", "action_items", "resolution_status", "sentiment_overview"]
+        required = ["key_topics", "decisions_made", "action_items", "dialogue_flow", "resolution_status", "sentiment_overview"]
         if all(k in parsed for k in required):
             return {"transcript": transcript, "summary": json.dumps(parsed), "validated": True}
     except Exception:
@@ -111,6 +112,7 @@ async def summarizer_node(state: dict) -> dict:
         "key_topics": [],
         "decisions_made": [],
         "action_items": [],
+        "dialogue_flow": [],
         "resolution_status": "unknown",
         "sentiment_overview": "neutral",
     }

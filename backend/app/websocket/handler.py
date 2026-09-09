@@ -217,7 +217,9 @@ async def _handle_voice_pipeline_v2(websocket: WebSocket, session_id: str) -> No
         summary = ""
         if len(conversation_mgr) > 0:
             try:
-                summary = await generate_call_summary(conversation_mgr.get_history())
+                summary = await asyncio.wait_for(generate_call_summary(conversation_mgr.get_history()), timeout=30)
+            except asyncio.TimeoutError:
+                logger.warning("SUMMARY_TIMEOUT session=%s", session_id)
             except Exception:
                 pass
 

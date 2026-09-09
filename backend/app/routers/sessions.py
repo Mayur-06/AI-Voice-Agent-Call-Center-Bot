@@ -1,3 +1,4 @@
+import asyncio
 from fastapi import APIRouter, HTTPException, status
 from app.models.database import get_supabase
 from app.models.schemas import SessionCreate, Session, MessageRequest
@@ -68,9 +69,10 @@ async def get_session_details(session_id: str):
 
     persona_name = None
     if persona_id:
-        persona_res = supabase.table("personas").select("name").eq("id", persona_id).limit(1).execute()
+        persona_res = supabase.table("personas").select("name, domain").eq("id", persona_id).limit(1).execute()
         if persona_res.data:
             persona_name = persona_res.data[0].get("name")
+            session["persona_domain"] = persona_res.data[0].get("domain")
 
     selected_voice_name = None
     if selected_voice:
@@ -104,7 +106,9 @@ async def get_session_summary(session_id: str):
         return {"session_id": session_id, "summary": ""}
 
     try:
-        summary = await generate_call_summary(history)
+        summary = await asyncio.wait_for(generate_call_summary(history), timeout=30)
+    except asyncio.TimeoutError:
+        summary = ""
     except Exception:
         summary = ""
 

@@ -56,6 +56,8 @@ async def ws_in_task(state: SessionPipelineState) -> None:
                 safe_put_nowait(state.control_queue, {"type": "force_stt", "data": data})
             elif data.get("type") == "transcript":
                 safe_put_nowait(state.control_queue, {"type": "external_transcript", "data": data})
+            elif data.get("type") == "external_transcript":
+                safe_put_nowait(state.control_queue, {"type": "external_transcript", "data": data})
             elif data.get("type") == "voice_select":
                 safe_put_nowait(state.control_queue, {"type": "voice_select", "data": data})
 

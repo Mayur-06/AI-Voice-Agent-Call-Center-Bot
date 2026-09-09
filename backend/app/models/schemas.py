@@ -110,6 +110,8 @@ class CallMetric(BaseModel):
     agent_speaking_time: float
     turn_count: int
     average_latency: float
+    p95_latency: Optional[float] = None
+    stream_status: Optional[str] = None
     sentiment_score: Optional[float] = None
     resolution_status: Optional[str] = None
 

@@ -1,6 +1,10 @@
+import logging
+import statistics
 import uuid
 from datetime import datetime, timezone
 from app.models.database import get_supabase, run_supabase
+
+logger = logging.getLogger(__name__)
 
 _PERSONA_SLUG_MAP = {
     "neha": "Neha",
@@ -176,6 +180,27 @@ async def end_session(session_id: str, recording_url: str | None = None, summary
     latencies = [m["latency_ms"] for m in messages if m.get("latency_ms") is not None]
     average_latency = sum(latencies) / len(latencies) if latencies else 0.0
 
+    p95_latency = None
+    if latencies:
+        sorted_latencies = sorted(latencies)
+        p95_index = int(len(sorted_latencies) * 0.95)
+        p95_latency = float(sorted_latencies[min(p95_index, len(sorted_latencies) - 1)])
+
+    stream_status = "unknown"
+    if latencies:
+        max_latency = max(latencies)
+        if len(latencies) > 1:
+            std = statistics.stdev(latencies)
+            cv = std / average_latency if average_latency > 0 else 0.0
+        else:
+            cv = 0.0
+        if average_latency > 5000 or max_latency > 10000:
+            stream_status = "unstable"
+        elif cv > 0.5 or max_latency > 5000:
+            stream_status = "degraded"
+        else:
+            stream_status = "stable"
+
     sentiments = [m["sentiment"] for m in messages if m.get("sentiment")]
     sentiment_score = None
     resolution_status = "unknown"
@@ -198,7 +223,7 @@ async def end_session(session_id: str, recording_url: str | None = None, summary
     try:
         await run_supabase(lambda: client.table("sessions").update(payload).eq("id", session_id).execute())
     except Exception:
-        pass
+        logger.exception("Failed to update session status for session=%s", session_id)
 
     metrics_payload = {
         "session_id": session_id,
@@ -207,10 +232,12 @@ async def end_session(session_id: str, recording_url: str | None = None, summary
         "agent_speaking_time": agent_speaking_time,
         "turn_count": turn_count,
         "average_latency": average_latency,
+        "p95_latency": p95_latency,
+        "stream_status": stream_status,
         "sentiment_score": sentiment_score,
         "resolution_status": resolution_status,
     }
     try:
         await run_supabase(lambda: client.table("call_metrics").upsert(metrics_payload, on_conflict="session_id").execute())
     except Exception:
-        pass
+        logger.exception("Failed to upsert call_metrics for session=%s", session_id)

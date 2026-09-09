@@ -1,18 +1,37 @@
 import { useEffect, useRef, useState, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { API_BASE } from '@/config';
-import {
-  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend,
-} from 'recharts';
 import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
+import { ChartContainer, ChartTooltip, ChartTooltipContent } from '@/components/ui/chart';
+import { Separator } from '@/components/ui/separator';
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid } from 'recharts';
+import { cn } from '@/lib/utils';
 
-const COLORS = ['#22c55e', '#eab308', '#ef4444', '#a855f7'];
+const sentimentChartConfig = {
+  score: {
+    label: 'Sentiment',
+    color: '#03191e',
+  },
+};
+
+function formatTime(seconds) {
+  if (!seconds || !isFinite(seconds)) return '0:00';
+  const m = Math.floor(seconds / 60);
+  const s = Math.floor(seconds % 60);
+  return `${m}:${s.toString().padStart(2, '0')}`;
+}
 
 export default function PostCallReviewScreen() {
   const { sessionId } = useParams();
   const navigate = useNavigate();
   const [session, setSession] = useState(null);
   const [summary, setSummary] = useState('');
+  const [summaryObj, setSummaryObj] = useState(null);
   const [recordingUrl, setRecordingUrl] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -21,8 +40,14 @@ export default function PostCallReviewScreen() {
   const [duration, setDuration] = useState(0);
   const [sentiment, setSentiment] = useState([]);
   const [metrics, setMetrics] = useState(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [copied, setCopied] = useState(false);
+  const [waitingForEnd, setWaitingForEnd] = useState(false);
   const audioRef = useRef(null);
   const recordingUrlRef = useRef(recordingUrl);
+
+  const [exportError, setExportError] = useState(null);
+  const [exportLoading, setExportLoading] = useState(false);
 
   useEffect(() => {
     recordingUrlRef.current = recordingUrl;
@@ -47,11 +72,23 @@ export default function PostCallReviewScreen() {
           throw new Error('Failed to load session');
         }
         const sessionData = await sessionRes.json();
-        if (!cancelled) setSession(sessionData);
+        if (cancelled) return;
+        setSession(sessionData);
+
+        const sessionHasEnded = sessionData.status === 'ended' || !!sessionData.ended_at;
+        setWaitingForEnd(!sessionHasEnded);
 
         if (summaryRes.ok) {
           const summaryData = await summaryRes.json();
-          if (!cancelled) setSummary(summaryData.summary || '');
+          if (!cancelled) {
+            const raw = summaryData.summary || '';
+            setSummary(raw);
+            try {
+              setSummaryObj(JSON.parse(raw));
+            } catch {
+              setSummaryObj(null);
+            }
+          }
         }
 
         if (sentimentRes.ok) {
@@ -86,6 +123,70 @@ export default function PostCallReviewScreen() {
     };
   }, [sessionId]);
 
+  useEffect(() => {
+    if (!sessionId || !waitingForEnd) return;
+    let cancelled = false;
+    let timer = null;
+
+    async function poll() {
+      try {
+        const res = await fetch(`${API_BASE}/api/sessions/${sessionId}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (cancelled) return;
+        setSession(data);
+
+        if (data.status === 'ended' || data.ended_at) {
+          setWaitingForEnd(false);
+
+          const [summaryRes, sentimentRes, metricsRes] = await Promise.all([
+            fetch(`${API_BASE}/api/sessions/${sessionId}/summary`),
+            fetch(`${API_BASE}/api/sessions/${sessionId}/sentiment`),
+            fetch(`${API_BASE}/api/sessions/${sessionId}/metrics`),
+          ]);
+
+          if (summaryRes.ok) {
+            const summaryData = await summaryRes.json();
+            const raw = summaryData.summary || '';
+            setSummary(raw);
+            try {
+              setSummaryObj(JSON.parse(raw));
+            } catch {
+              setSummaryObj(null);
+            }
+          }
+
+          if (sentimentRes.ok) {
+            const sentimentData = await sentimentRes.json();
+            setSentiment(Array.isArray(sentimentData) ? sentimentData : []);
+          }
+
+          if (metricsRes.ok) {
+            const metricsData = await metricsRes.json();
+            setMetrics(metricsData);
+          }
+
+          const recordingRes = await fetch(`${API_BASE}/api/sessions/${sessionId}/recording`);
+          if (recordingRes.ok) {
+            const blob = await recordingRes.blob();
+            const url = URL.createObjectURL(blob);
+            setRecordingUrl(url);
+          }
+
+          if (timer) clearTimeout(timer);
+        }
+      } catch {
+        // ignore poll errors
+      }
+    }
+
+    timer = setInterval(poll, 1500);
+    return () => {
+      cancelled = true;
+      if (timer) clearInterval(timer);
+    };
+  }, [sessionId, waitingForEnd]);
+
   const togglePlay = () => {
     if (!audioRef.current || !recordingUrl) return;
     if (audioRef.current.paused) {
@@ -105,7 +206,7 @@ export default function PostCallReviewScreen() {
 
   const handleLoadedMetadata = () => {
     if (audioRef.current) {
-      setDuration(audioRef.current.duration);
+      setDuration(audioRef.current.duration || 0);
     }
   };
 
@@ -114,242 +215,553 @@ export default function PostCallReviewScreen() {
     setCurrentTime(0);
   };
 
-  const seekTo = (ms) => {
+  const seekTo = (seconds) => {
     if (!audioRef.current) return;
-    const seconds = ms / 1000;
     audioRef.current.currentTime = seconds;
     setCurrentTime(seconds);
   };
 
-  const handleDownloadTranscript = (format) => {
-    const url = `${API_BASE}/api/sessions/${sessionId}/export/transcript?format=${format}`;
-    window.open(url, '_blank');
+  const handleExportTranscript = async (format) => {
+    setExportLoading(true);
+    setExportError(null);
+    try {
+      const url = `${API_BASE}/api/sessions/${sessionId}/export/transcript?format=${format}`;
+      window.open(url, '_blank');
+    } catch {
+      setExportError('Failed to export transcript');
+    } finally {
+      setExportLoading(false);
+    }
   };
 
-  const handleDownloadRecording = () => {
-    const url = `${API_BASE}/api/sessions/${sessionId}/export/recording?format=wav`;
-    window.open(url, '_blank');
+  const handleExportRecording = async (format) => {
+    setExportLoading(true);
+    setExportError(null);
+    try {
+      const url = `${API_BASE}/api/sessions/${sessionId}/export/recording?format=${format}`;
+      window.open(url, '_blank');
+    } catch {
+      setExportError('Failed to export recording');
+    } finally {
+      setExportLoading(false);
+    }
   };
 
-  const handleDownloadSummary = (format) => {
-    const url = `${API_BASE}/api/sessions/${sessionId}/export/summary?format=${format}`;
-    window.open(url, '_blank');
+  const handleExportSummary = async (format) => {
+    setExportLoading(true);
+    setExportError(null);
+    try {
+      const url = `${API_BASE}/api/sessions/${sessionId}/export/summary?format=${format}`;
+      window.open(url, '_blank');
+    } catch {
+      setExportError('Failed to export summary');
+    } finally {
+      setExportLoading(false);
+    }
   };
 
-  const sentimentTimeline = useMemo(() => {
+  const handleCopyJson = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/sessions/${sessionId}/transcript`);
+      if (!res.ok) {
+        setExportError('Failed to copy transcript');
+        return;
+      }
+      const data = await res.json();
+      await navigator.clipboard.writeText(JSON.stringify(data, null, 2));
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      setExportError('Failed to copy transcript');
+    }
+  };
+
+  const sentimentChartData = useMemo(() => {
     if (!sentiment || !session?.messages) return [];
     const byId = new Map(session.messages.map(m => [m.id, m]));
-    return sentiment.map(s => {
-      const msg = byId.get(s.message_id);
-      return {
-        ...s,
-        timestamp: msg?.timestamp || s.created_at,
-        score: s.score,
-      };
-    }).filter(s => s.timestamp).sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+    return sentiment
+      .map(s => {
+        const msg = byId.get(s.message_id);
+        return {
+          time: msg ? new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '',
+          score: s.score,
+          message_id: s.message_id,
+        };
+      })
+      .filter(s => s.time)
+      .sort((a, b) => {
+        const ta = session.messages.find(m => m.id === a.message_id);
+        const tb = session.messages.find(m => m.id === b.message_id);
+        if (!ta || !tb) return 0;
+        return new Date(ta.timestamp) - new Date(tb.timestamp);
+      });
   }, [sentiment, session]);
 
-  const sentimentPieData = useMemo(() => {
+  const timelineMarkers = useMemo(() => {
     if (!session?.messages) return [];
-    const counts = {};
-    session.messages.forEach(m => {
-      if (m.speaker === 'user' && m.sentiment) {
-        counts[m.sentiment] = (counts[m.sentiment] || 0) + 1;
+    const markers = [];
+    const msgMap = new Map(session.messages.map(m => [m.id, m]));
+
+    if (session.messages.length > 0) {
+      markers.push({
+        label: 'Intro',
+        time: session.messages[0].timestamp,
+        message_id: session.messages[0].id,
+      });
+    }
+
+    sentiment.forEach(s => {
+      const msg = msgMap.get(s.message_id);
+      if (msg && msg.latency_ms > 2000) {
+        markers.push({
+          label: 'Latency Clarification',
+          time: msg.timestamp,
+          message_id: s.message_id,
+        });
       }
     });
-    return Object.entries(counts).map(([name, value]) => ({ name, value }));
-  }, [session]);
 
-  if (loading) return <div className="p-6">Loading review...</div>;
+    session.messages.forEach(msg => {
+      if (msg.interrupted) {
+        markers.push({
+          label: 'Buffer Inquiry',
+          time: msg.timestamp,
+          message_id: msg.id,
+        });
+      }
+    });
+
+    if (session.messages.length > 0) {
+      markers.push({
+        label: 'Active Playhead',
+        time: session.messages[session.messages.length - 1].timestamp,
+        message_id: session.messages[session.messages.length - 1].id,
+      });
+    }
+
+    return markers.sort((a, b) => new Date(a.time) - new Date(b.time));
+  }, [session, sentiment]);
+
+  const currentMessageId = useMemo(() => {
+    if (!session?.messages || !audioRef.current) return null;
+    const currentMs = currentTime * 1000;
+    let activeId = null;
+    for (const msg of session.messages) {
+      if (msg.recording_start_ms != null && msg.recording_start_ms <= currentMs) {
+        activeId = msg.id;
+      }
+    }
+    return activeId;
+  }, [currentTime, session]);
+
+  const turnCountAtPlayhead = useMemo(() => {
+    if (!session?.messages) return 0;
+    const currentMs = currentTime * 1000;
+    return session.messages.filter(m => m.recording_start_ms != null && m.recording_start_ms <= currentMs).length;
+  }, [currentTime, session]);
+
+  const filteredMessages = useMemo(() => {
+    if (!searchQuery.trim()) return session?.messages || [];
+    const q = searchQuery.toLowerCase();
+    return (session?.messages || []).filter(m => m.text.toLowerCase().includes(q));
+  }, [searchQuery, session]);
+
+  const startedAt = session?.started_at ? new Date(session.started_at) : null;
+  const endedAt = session?.ended_at ? new Date(session.ended_at) : null;
+  const sessionDate = startedAt ? startedAt.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) : 'N/A';
+  const sessionDuration = metrics?.total_duration ? `${metrics.total_duration.toFixed(1)}s` : `${session?.duration ? session.duration.toFixed(1) : 0}s`;
+  const personaName = session?.persona_name || 'Unknown';
+  const personaDomain = session?.persona_domain || 'General';
+
+  const dialogueFlow = summaryObj?.dialogue_flow || [];
+  const decisions = summaryObj?.decisions_made || [];
+  const actionItems = summaryObj?.action_items || [];
+  const keyTopics = summaryObj?.key_topics || [];
+
+  if (loading && !session) return <div className="p-6">Loading review...</div>;
   if (error) return <div className="p-6 text-red-500">{error}</div>;
   if (!session) return <div className="p-6">Session not found.</div>;
 
-  const messages = session.messages || [];
-  const startedAt = session.started_at ? new Date(session.started_at).toLocaleString() : 'N/A';
-  const endedAt = session.ended_at ? new Date(session.ended_at).toLocaleString() : 'In progress';
-
   return (
-    <div className="p-6 space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">Post-Call Review</h1>
-        <div className="flex gap-2">
+    <div className="post-call-screen">
+      <div className="post-call-main">
+        {/* Header */}
+        <header className="post-call-header">
+          <div className="post-call-header-left">
+            <h1 className="post-call-title">Post-Call Review</h1>
+            <div className="post-call-header-meta">
+              <span className="post-call-session-title">Session with {personaName}</span>
+              <span className="post-call-meta-sep">·</span>
+              <span className="post-call-meta-text">{sessionDate}</span>
+              <span className="post-call-meta-sep">·</span>
+              <span className="post-call-meta-text">{sessionDuration}</span>
+            </div>
+            {waitingForEnd && (
+              <div className="mt-2 text-sm text-muted-foreground">Finalizing session...</div>
+            )}
+          </div>
           <Button variant="outline" size="sm" onClick={() => navigate('/session')}>
             New Session
           </Button>
-          <Button variant="outline" size="sm" onClick={() => navigate('/analytics')}>
-            Analytics Dashboard
-          </Button>
-        </div>
-      </div>
+        </header>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div className="border rounded-lg p-4">
-          <h2 className="font-medium text-gray-500">Session</h2>
-          <p className="font-mono text-sm">{session.id}</p>
-          <p className="text-sm">Started: {startedAt}</p>
-          <p className="text-sm">Ended: {endedAt}</p>
-          <p className="text-sm">Status: {session.status}</p>
-        </div>
-        <div className="border rounded-lg p-4">
-          <h2 className="font-medium text-gray-500">Persona</h2>
-          <p className="text-sm">{session.persona_id || 'N/A'}</p>
-          <p className="text-sm">Voice: {session.selected_voice || 'N/A'}</p>
-        </div>
-        <div className="border rounded-lg p-4">
-          <h2 className="font-medium text-gray-500">Recording</h2>
-          {recordingUrl ? (
-            <div className="space-y-2">
-              <div className="flex items-center gap-2">
-                <Button size="sm" onClick={togglePlay}>
-                  {playing ? 'Pause' : 'Play'}
-                </Button>
-                <span className="text-xs text-gray-500">
-                  {Math.floor(currentTime)}s / {Math.floor(duration)}s
-                </span>
+        {/* Playback Module */}
+        <Card>
+          <CardHeader>
+            <div className="post-call-playback-header">
+              <div>
+                <CardTitle>Playback</CardTitle>
+                <CardDescription>Review the call recording and transcript</CardDescription>
               </div>
-              <input
-                type="range"
-                min={0}
-                max={duration || 0}
-                step={0.1}
-                value={currentTime}
-                onChange={(e) => seekTo(parseFloat(e.target.value) * 1000)}
-                className="w-full"
-              />
-              <audio
-                ref={audioRef}
-                src={recordingUrl}
-                onTimeUpdate={handleTimeUpdate}
-                onLoadedMetadata={handleLoadedMetadata}
-                onEnded={handleEnded}
-                onPlay={() => setPlaying(true)}
-                onPause={() => setPlaying(false)}
-                className="hidden"
-              />
+              <div className="post-call-playback-meta">
+                <Badge variant="secondary">{turnCountAtPlayhead} / {session.messages?.length || 0} turns</Badge>
+                <Badge variant="secondary">{formatTime(currentTime)} / {formatTime(duration)}</Badge>
+              </div>
             </div>
-          ) : (
-            <p className="text-sm text-gray-500">No recording available</p>
-          )}
-        </div>
-      </div>
-
-      {metrics && (
-        <div className="border rounded-lg p-4">
-          <h2 className="font-medium text-gray-500 mb-2">Call Metrics</h2>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <div>
-              <p className="text-xs text-gray-500">Total Duration</p>
-              <p className="text-lg font-semibold">{metrics.total_duration?.toFixed(1) ?? 0}s</p>
-            </div>
-            <div>
-              <p className="text-xs text-gray-500">User Speaking</p>
-              <p className="text-lg font-semibold">{metrics.user_speaking_time?.toFixed(1) ?? 0}s</p>
-            </div>
-            <div>
-              <p className="text-xs text-gray-500">Agent Speaking</p>
-              <p className="text-lg font-semibold">{metrics.agent_speaking_time?.toFixed(1) ?? 0}s</p>
-            </div>
-            <div>
-              <p className="text-xs text-gray-500">Turns</p>
-              <p className="text-lg font-semibold">{metrics.turn_count ?? 0}</p>
-            </div>
-            <div>
-              <p className="text-xs text-gray-500">Avg Latency</p>
-              <p className="text-lg font-semibold">{Math.round(metrics.average_latency ?? 0)} ms</p>
-            </div>
-            <div>
-              <p className="text-xs text-gray-500">Sentiment Score</p>
-              <p className="text-lg font-semibold">{(metrics.sentiment_score ?? 0).toFixed(2)}</p>
-            </div>
-            <div className="md:col-span-2">
-              <p className="text-xs text-gray-500">Resolution</p>
-              <p className="text-lg font-semibold capitalize">{(metrics.resolution_status || 'unknown').replace(/_/g, ' ')}</p>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {sentimentPieData.length > 0 && (
-        <div className="border rounded-lg p-4">
-          <h2 className="font-medium text-gray-500 mb-2">Sentiment Breakdown</h2>
-          <div className="flex flex-col md:flex-row items-center gap-4">
-            <ResponsiveContainer width="100%" height={220}>
-              <PieChart>
-                <Pie data={sentimentPieData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={80} label>
-                  {sentimentPieData.map((entry, index) => (
-                    <Cell key={entry.name} fill={COLORS[index % COLORS.length]} />
-                  ))}
-                </Pie>
-                <Tooltip />
-                <Legend />
-              </PieChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-      )}
-
-      {sentimentTimeline.length > 0 && (
-        <div className="border rounded-lg p-4">
-          <h2 className="font-medium text-gray-500 mb-2">Sentiment Timeline</h2>
-          <ResponsiveContainer width="100%" height={220}>
-            <LineChart data={sentimentTimeline}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="timestamp" tickFormatter={(v) => new Date(v).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} />
-              <YAxis domain={[-1, 1]} ticks={[-1, -0.5, 0, 0.5, 1]} />
-              <Tooltip labelFormatter={(v) => new Date(v).toLocaleTimeString()} formatter={(value) => [value, 'score']} />
-              <Line type="monotone" dataKey="score" stroke="#2563eb" strokeWidth={2} dot />
-            </LineChart>
-          </ResponsiveContainer>
-        </div>
-      )}
-
-      {summary && (
-        <div className="border rounded-lg p-4">
-          <h2 className="font-medium text-gray-500 mb-2">Summary</h2>
-          <p className="text-sm whitespace-pre-wrap">{summary}</p>
-        </div>
-      )}
-
-      <div className="border rounded-lg p-4">
-        <h2 className="font-medium text-gray-500 mb-2">Transcript</h2>
-        {messages.length === 0 ? (
-          <p className="text-sm text-gray-500">No messages in this session.</p>
-        ) : (
-          <div className="space-y-3 max-h-96 overflow-y-auto">
-            {messages.map((msg) => {
-              return (
-                <div key={msg.id} className="text-sm">
-                  <span className="font-medium">{msg.speaker === 'user' ? 'You' : 'Assistant'}</span>
-                  <span className="text-gray-400 text-xs ml-2">
-                    {msg.timestamp ? new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : ''}
-                  </span>
-                  {msg.recording_start_ms != null && (
-                    <button
-                      type="button"
-                      className="ml-2 text-xs text-blue-600 underline"
-                      onClick={() => seekTo(msg.recording_start_ms)}
-                    >
-                      Jump to audio
-                    </button>
-                  )}
-                  <p className="mt-0.5">{msg.text}</p>
+          </CardHeader>
+          <CardContent>
+            {recordingUrl ? (
+              <div className="post-call-playback">
+                <div className="post-call-playback-controls">
+                  <Button size="icon-sm" variant="outline" onClick={togglePlay} aria-label={playing ? 'Pause' : 'Play'}>
+                    {playing ? (
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16" rx="1" /><rect x="14" y="4" width="4" height="16" rx="1" /></svg>
+                    ) : (
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.14v14l11-7-11-7z" /></svg>
+                    )}
+                  </Button>
+                  <input
+                    type="range"
+                    min={0}
+                    max={duration || 0}
+                    step={0.1}
+                    value={currentTime}
+                    onChange={(e) => seekTo(parseFloat(e.target.value))}
+                    className="post-call-seek"
+                  />
                 </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
+                <audio
+                  ref={audioRef}
+                  src={recordingUrl}
+                  onTimeUpdate={handleTimeUpdate}
+                  onLoadedMetadata={handleLoadedMetadata}
+                  onEnded={handleEnded}
+                  onPlay={() => setPlaying(true)}
+                  onPause={() => setPlaying(false)}
+                  className="hidden"
+                />
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground">No recording available</p>
+            )}
+          </CardContent>
+        </Card>
 
-      <div className="border rounded-lg p-4">
-        <h2 className="font-medium text-gray-500 mb-2">Export</h2>
-        <div className="flex flex-wrap gap-2">
-          <Button size="sm" variant="outline" onClick={() => handleDownloadTranscript('txt')}>Transcript TXT</Button>
-          <Button size="sm" variant="outline" onClick={() => handleDownloadTranscript('json')}>Transcript JSON</Button>
-          <Button size="sm" variant="outline" onClick={handleDownloadRecording}>Recording WAV</Button>
-          <Button size="sm" variant="outline" onClick={() => handleDownloadSummary('txt')}>Summary TXT</Button>
-          <Button size="sm" variant="outline" onClick={() => handleDownloadSummary('json')}>Summary JSON</Button>
-        </div>
+        {/* Sentiment & Engagement Flow */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Sentiment & Engagement Flow</CardTitle>
+            <CardDescription>Timeline markers highlight key moments</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {sentimentChartData.length > 0 ? (
+              <>
+                <ChartContainer config={sentimentChartConfig} style={{ width: '100%', height: 220 }}>
+                  <LineChart data={sentimentChartData} margin={{ left: 12, right: 12 }}>
+                    <CartesianGrid vertical={false} strokeDasharray="3 3" />
+                    <XAxis dataKey="time" tickLine={false} axisLine={false} tickMargin={8} />
+                    <YAxis domain={[-1, 1]} ticks={[-1, -0.5, 0, 0.5, 1]} tickLine={false} axisLine={false} />
+                    <ChartTooltip content={<ChartTooltipContent />} />
+                    <Line dataKey="score" stroke="var(--color-score)" strokeWidth={2} dot />
+                  </LineChart>
+                </ChartContainer>
+                <div className="post-call-timeline-markers">
+                  {timelineMarkers.map((marker, idx) => (
+                    <Tooltip key={idx}>
+                      <TooltipTrigger asChild>
+                        <Badge variant="outline" className="post-call-marker">
+                          {marker.label}
+                        </Badge>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        {new Date(marker.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      </TooltipContent>
+                    </Tooltip>
+                  ))}
+                </div>
+              </>
+            ) : (
+              <p className="text-sm text-muted-foreground">No sentiment data available</p>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Meeting Overview */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Meeting Overview</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="post-call-overview-grid">
+              <div>
+                <span className="post-call-overview-label">Purpose</span>
+                <p className="post-call-overview-value">{personaDomain}</p>
+              </div>
+              <div>
+                <span className="post-call-overview-label">Participants</span>
+                <p className="post-call-overview-value">You · {personaName}</p>
+              </div>
+              <div>
+                <span className="post-call-overview-label">Duration</span>
+                <p className="post-call-overview-value">{sessionDuration}</p>
+              </div>
+              <div>
+                <span className="post-call-overview-label">Date</span>
+                <p className="post-call-overview-value">{sessionDate}</p>
+              </div>
+            </div>
+            {dialogueFlow.length > 0 && (
+              <>
+                <Separator className="post-call-separator" />
+                <div>
+                  <span className="post-call-overview-label">Dialogue Flow</span>
+                  <div className="post-call-flow-list">
+                    {dialogueFlow.map((step, idx) => (
+                      <div key={idx} className="post-call-flow-item">
+                        <span className="post-call-flow-index">{idx + 1}</span>
+                        <span className="post-call-flow-text">{step}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Key Takeaways & Agreed Decisions */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Key Takeaways & Agreed Decisions</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="post-call-takeaways">
+              {keyTopics.length > 0 && (
+                <div className="post-call-takeaway-section">
+                  <span className="post-call-takeaway-label">Key Topics</span>
+                  <ul className="post-call-takeaway-list">
+                    {keyTopics.map((topic, idx) => (
+                      <li key={idx} className="post-call-takeaway-item">{topic}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {decisions.length > 0 && (
+                <div className="post-call-takeaway-section">
+                  <span className="post-call-takeaway-label">Decisions Made</span>
+                  <ul className="post-call-takeaway-list">
+                    {decisions.map((item, idx) => (
+                      <li key={idx} className="post-call-takeaway-item">{item}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {actionItems.length > 0 && (
+                <div className="post-call-takeaway-section">
+                  <span className="post-call-takeaway-label">Action Items</span>
+                  <ul className="post-call-takeaway-list">
+                    {actionItems.map((item, idx) => (
+                      <li key={idx} className="post-call-takeaway-item">{item}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {keyTopics.length === 0 && decisions.length === 0 && actionItems.length === 0 && (
+                <p className="text-sm text-muted-foreground">No key takeaways recorded</p>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Call Metrics */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Call Metrics</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="post-call-metrics-grid">
+              <div>
+                <span className="post-call-metric-label">Duration</span>
+                <p className="post-call-metric-value">{metrics ? `${metrics.total_duration?.toFixed(1) ?? 0}s` : '—'}</p>
+              </div>
+              <div>
+                <span className="post-call-metric-label">Dialogue Turns</span>
+                <p className="post-call-metric-value">{metrics ? (metrics.turn_count ?? 0) : '—'}</p>
+              </div>
+              <div>
+                <span className="post-call-metric-label">Avg Latency</span>
+                <p className="post-call-metric-value">{metrics ? `${Math.round(metrics.average_latency ?? 0)} ms` : '—'}</p>
+              </div>
+              <div>
+                <span className="post-call-metric-label">P95 Latency</span>
+                <p className="post-call-metric-value">{metrics && metrics.p95_latency != null ? `${Math.round(metrics.p95_latency)} ms` : '—'}</p>
+              </div>
+              <div>
+                <span className="post-call-metric-label">Stream Status</span>
+                <p className="post-call-metric-value capitalize">{metrics ? (metrics.stream_status || 'unknown') : '—'}</p>
+              </div>
+              <div>
+                <span className="post-call-metric-label">Sentiment Score</span>
+                <p className="post-call-metric-value">{metrics ? (metrics.sentiment_score ?? 0).toFixed(2) : '—'}</p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Conversation Transcript */}
+        <Card>
+          <CardHeader>
+            <div className="post-call-transcript-header">
+              <div>
+                <CardTitle>Conversation Transcript</CardTitle>
+                <CardDescription>{session.messages?.length || 0} turns</CardDescription>
+              </div>
+              <div className="post-call-transcript-search">
+                <input
+                  type="text"
+                  placeholder="Search transcript..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="post-call-search-input"
+                />
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent>
+            {filteredMessages.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No messages in this session.</p>
+            ) : (
+              <div className="post-call-transcript-list">
+                {filteredMessages.map((msg) => {
+                  const isActive = msg.id === currentMessageId;
+                  return (
+                    <div
+                      key={msg.id}
+                      className={cn(
+                        'post-call-transcript-row',
+                        isActive && 'post-call-transcript-row--active'
+                      )}
+                      onClick={() => {
+                        if (msg.recording_start_ms != null) {
+                          seekTo(msg.recording_start_ms / 1000);
+                        }
+                      }}
+                    >
+                      <div className="post-call-transcript-meta">
+                        <Avatar size="sm" className="post-call-transcript-avatar">
+                          {msg.speaker === 'user' ? (
+                            <>
+                              <AvatarImage src="https://res.cloudinary.com/ejpx0qht/image/upload/v1788858007/aura-avatars/aria.png" alt="You" />
+                              <AvatarFallback>You</AvatarFallback>
+                            </>
+                          ) : (
+                            <>
+                              <AvatarImage src={`https://res.cloudinary.com/ejpx0qht/image/upload/v1788858004/aura-avatars/${session.persona_name?.toLowerCase() || 'aria'}.png`} alt={session.persona_name || 'Aura'} />
+                              <AvatarFallback>{session.persona_name?.[0] || 'A'}</AvatarFallback>
+                            </>
+                          )}
+                        </Avatar>
+                        <span className="post-call-transcript-name">{msg.speaker === 'user' ? 'You' : session.persona_name || 'Aura'}</span>
+                        <span className="post-call-transcript-time">
+                          {msg.timestamp ? new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : ''}
+                        </span>
+                      </div>
+                      <p className="post-call-transcript-text">{msg.text}</p>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Export */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Export</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {exportError && (
+              <p className="text-sm text-red-600 mb-3">{exportError}</p>
+            )}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="sm" disabled={exportLoading}>
+                  {exportLoading ? 'Exporting...' : 'Export'}
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="ml-2">
+                    <path d="M6 9l6 6 6-6" />
+                  </svg>
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start">
+                <DropdownMenuItem onSelect={() => handleExportTranscript('txt')}>
+                  <FileTextIcon /> TXT Transcript
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => handleExportTranscript('json')}>
+                  <FileJsonIcon /> JSON Transcript
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => handleExportSummary('pdf')}>
+                  <FileTextIcon /> PDF Summary
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => handleExportRecording('mp3')}>
+                  <FileAudioIcon /> MP3 Full Audio
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => handleExportRecording('wav')}>
+                  <FileAudioIcon /> WAV Full Audio
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={handleCopyJson}>
+                  <FileJsonIcon /> {copied ? 'Copied!' : 'Copy JSON Content'}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </CardContent>
+        </Card>
       </div>
     </div>
+  );
+}
+
+function FileTextIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+      <polyline points="14 2 14 8 20 8" />
+      <line x1="16" y1="13" x2="8" y2="13" />
+      <line x1="16" y1="17" x2="8" y2="17" />
+      <polyline points="10 9 9 9 8 9" />
+    </svg>
+  );
+}
+
+function FileAudioIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M9 18V5l12-2v13" />
+      <circle cx="6" cy="18" r="3" />
+      <circle cx="18" cy="16" r="3" />
+    </svg>
+  );
+}
+
+function FileJsonIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+      <polyline points="14 2 14 8 20 8" />
+      <path d="M8 13h2" />
+      <path d="M8 17h2" />
+      <path d="M14 13h2" />
+      <path d="M14 17h2" />
+    </svg>
   );
 }

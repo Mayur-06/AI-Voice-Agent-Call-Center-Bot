@@ -117,45 +117,39 @@ Start Call. It should be the strongest CTA on the page and use Ink Black as the 
 
 - Do not crowd the setup page with secondary controls. 
 
-## **4. Screen 02 — Live Voice Call** 
-
-Purpose: Provide an immersive, low-distraction voice conversation experience with clear system state. 
-
-Reference flow: Connected → listening → thinking/speaking → pause/mute → End Call 
-
-### **Required sections** 
-
-- Top bar: Aura — Voice Session, connection state, copy/share actions. 
-
-- Central voice presence: Aura identity, breathing aura, ripple/pulse states. 
-
-- Current speech state: "Aura is speaking..." plus waveform/progress feedback. 
-
-- Conversation area: turn-by-turn transcript with participant identity and timestamps. 
-
-- Session Context panel: persona summary, referenced files/sections, spatial voice / audio state. 
-
-- Bottom controls: microphone/mute, pause affordance, End Call. 
-
-### **Primary interaction** 
-
-End Call is the destructive action and must remain visually separated from microphone controls. 
-
-### **Interaction / visual rules** 
-
-- The central aura is the primary feedback mechanism and must remain visually dominant. 
-
-- Idle: slow breathing. Listening: slight expansion. Speaking: waveform + breathing. Thinking: slower ripple. Muted/disconnected: reduced visual intensity. 
-
-- Motion should feel organic and calm, not like a gaming HUD. 
-
-- Keep the live screen from becoming a dashboard: voice presence → current speech → conversation → context. 
-
-- Controls stay intentionally limited to reduce cognitive load. 
-
-Page 3 
-
-**AURA VOICE STUDIO  /  UI DESIGN PLAN** 
+## 4. Screen 02 — Live Voice Call
+ 
+Purpose: Provide an immersive, low-distraction voice conversation experience with clear system state.
+Reference flow: Connected → listening → thinking/speaking → pause/mute → End Call
+ 
+### Required sections
+ 
+- Top bar: Aura — Voice Session, connection state, copy/share actions.
+- Central voice presence: Aura identity, breathing aura, ripple/pulse states.
+- Current speech state: "Aura is speaking..." plus waveform/progress feedback.
+- Conversation area: turn-by-turn transcript with participant identity and timestamps.
+- Session Context panel: persona summary, referenced files/sections, spatial voice / audio state.
+- Bottom controls: microphone/mute, pause affordance, End Call.
+### Primary interaction
+ 
+End Call is the destructive action and must remain visually separated from microphone controls.
+ 
+### Interaction / visual rules
+ 
+- The central aura is the primary feedback mechanism and must remain visually dominant.
+- Idle: slow breathing. Listening: slight expansion. Speaking: waveform + breathing. Thinking: slower ripple. Muted/disconnected: reduced visual intensity.
+- Motion should feel organic and calm, not like a gaming HUD.
+- Keep the live screen from becoming a dashboard: voice presence → current speech → conversation → context.
+- Controls stay intentionally limited to reduce cognitive load.
+### 4.1 Implementation Update — Screen 02 (as built)
+ 
+The following reflects the implemented build and supersedes the corresponding points above where noted. All colors, spacing, radius, and shadow values still follow the tokens in section 2.
+- Central aura is dual-purpose: it is both the primary state visualizer AND the mic mute/unmute control (click to mute). Because it is now an interactive, icon-only control, it must expose a discoverable affordance (hover state) and an accessible label (Tooltip/aria-label), per the Button + Tooltip pairing rule.
+- Pause is handled via keyboard shortcut (Space) rather than a separate visible bottom-bar button. This reinforces the existing rule "Controls stay intentionally limited to reduce cognitive load" — treat this as the preferred pattern, not a gap.
+- Spatial audio state ("Spatial Voice Audio · Clear & Natural") is displayed in the bottom-left of the control bar, not inside the Session Context panel. Session Context panel is scoped to persona summary + referenced files only.
+- Bottom bar composition (left to right): spatial audio indicator, text input fallback ("Type a message or note for Aura..."), avatar/status dot, End Call. Text input fallback satisfies the plan's typed-message requirement and lives here rather than as a separate modal.
+- Conversation panel header includes a secondary label ("Notes & Flow") and two icon actions — additive to the plan, keep consistent with icon sizing/stroke rules in the shadcn component plan.
+- Top bar content (label, connection state, copy/share actions) remains as originally specified in "Required sections" above — not yet confirmed as implemented; verify against the live build before treating it as resolved.
 
 ## **5. Screen 03 — Post-Call / Session Debrief** 
 

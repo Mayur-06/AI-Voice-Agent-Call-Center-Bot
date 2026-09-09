@@ -1,7 +1,16 @@
-import { useEffect, useRef, useCallback, useState, useMemo } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import React, { useEffect, useRef, useCallback, useState } from 'react';
 import { Button } from '@/components/ui/button';
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '@/components/ui/alert-dialog';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { Separator } from '@/components/ui/separator';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
@@ -9,14 +18,14 @@ import { useVoiceCall } from '@/hooks/useVoiceCall';
 import useCallStore from '@/store/callStore';
 import { cn } from '@/lib/utils';
 
-const PERSONAS = [
+export const PERSONAS = [
   {
     id: 'neha',
     name: 'Neha',
     initials: 'NP',
     role: 'Support Advisor',
     description: 'Empathetic, patient and solution-oriented. Helps you work through issues with warmth and clarity.',
-    avatarUrl: 'https://res.cloudinary.com/ejpx0qht/image/upload/v1788858004/aura-avatars/neha.png',
+    avatarUrl: 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=150&auto=format&fit=crop&q=80',
   },
   {
     id: 'alena',
@@ -24,7 +33,7 @@ const PERSONAS = [
     initials: 'AV',
     role: 'Technical Advisor',
     description: 'Precise, knowledgeable and step-by-step. Breaks down complex topics into actionable guidance.',
-    avatarUrl: 'https://res.cloudinary.com/ejpx0qht/image/upload/v1788858005/aura-avatars/alena.png',
+    avatarUrl: 'https://images.unsplash.com/photo-1580489944761-15a19d654956?w=150&auto=format&fit=crop&q=80',
   },
   {
     id: 'sora',
@@ -32,7 +41,7 @@ const PERSONAS = [
     initials: 'ST',
     role: 'Sales Partner',
     description: 'Friendly, persuasive and feature-focused. Helps align solutions with your needs and next steps.',
-    avatarUrl: 'https://res.cloudinary.com/ejpx0qht/image/upload/v1788858006/aura-avatars/sora.png',
+    avatarUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
   },
   {
     id: 'aria',
@@ -40,12 +49,12 @@ const PERSONAS = [
     initials: 'AS',
     role: 'General Assistant',
     description: 'Balanced and helpful. Adapts to your intent and keeps conversations useful, direct, and supportive.',
-    avatarUrl: 'https://res.cloudinary.com/ejpx0qht/image/upload/v1788858007/aura-avatars/aria.png',
+    avatarUrl: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=150&auto=format&fit=crop&q=80',
   },
 ];
 
-function getPersona(id) {
-  return PERSONAS.find((p) => p.id === id) || null;
+export function getPersona(id) {
+  return PERSONAS.find((p) => p.id === id) || PERSONAS[0];
 }
 
 function MicIcon() {
@@ -97,14 +106,6 @@ function SendIcon() {
   );
 }
 
-function CheckIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#22c55e" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-      <polyline points="20 6 9 17 4 12" />
-    </svg>
-  );
-}
-
 function InfoIcon() {
   return (
     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -127,7 +128,7 @@ function CloseIcon() {
 function TabIcon({ tab }) {
   if (tab === 'call') {
     return (
-      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <svg className="vc-mobile-tab-icon shrink-0" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
         <path d="M12 2a3 3 0 0 1 3 3v7a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3Z" />
         <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
         <line x1="12" y1="19" x2="12" y2="22" />
@@ -136,13 +137,13 @@ function TabIcon({ tab }) {
   }
   if (tab === 'transcript') {
     return (
-      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <svg className="vc-mobile-tab-icon shrink-0" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
         <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
       </svg>
     );
   }
   return (
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <svg className="vc-mobile-tab-icon shrink-0" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <circle cx="12" cy="12" r="10" />
       <line x1="12" y1="16" x2="12" y2="12" />
       <line x1="12" y1="8" x2="12.01" y2="8" />
@@ -153,12 +154,12 @@ function TabIcon({ tab }) {
 function SessionContextContent({ persona, docs }) {
   return (
     <div className="vc-context-body">
-      {/* Persona */}
+      {/* Persona card */}
       {persona && (
         <div className="vc-persona-card">
           <div className="vc-persona-row">
             <div className="vc-persona-avatar">
-              <Avatar size="lg" className="h-10 w-10">
+              <Avatar size="lg" className="h-10 w-10 border border-[#03191e]/15">
                 {persona.avatarUrl ? (
                   <AvatarImage src={persona.avatarUrl} alt={persona.name} />
                 ) : null}
@@ -183,23 +184,25 @@ function SessionContextContent({ persona, docs }) {
           <span className="vc-docs-count">{docs.length} topic{docs.length !== 1 ? 's' : ''}</span>
         </div>
         <div className="vc-docs-list">
-          {docs.length > 0 ? docs.map((doc, idx) => {
-            const id = doc?.id != null ? String(doc.id) : String(idx);
-            const filename = typeof doc?.filename === 'string' ? doc.filename : `Document ${idx + 1}`;
-            const pageCount = typeof doc?.page_count === 'number' ? `${doc.page_count} pages` : null;
-            const meta = pageCount || null;
-            return (
-              <div key={id} className="vc-doc-item">
-                <div className="vc-doc-icon" aria-hidden="true">
-                  <FileIcon />
+          {docs.length > 0 ? (
+            docs.map((doc, idx) => {
+              const id = doc?.id != null ? String(doc.id) : String(idx);
+              const filename = typeof doc?.filename === 'string' ? doc.filename : `Document ${idx + 1}`;
+              const pageCount = typeof doc?.page_count === 'number' ? `${doc.page_count} pages` : null;
+              const meta = pageCount || 'Attached reference';
+              return (
+                <div key={id} className="vc-doc-item">
+                  <div className="vc-doc-icon" aria-hidden="true">
+                    <FileIcon />
+                  </div>
+                  <div className="vc-doc-body">
+                    <p className="vc-doc-name" title={filename}>{filename}</p>
+                    {meta && <p className="vc-doc-meta">{meta}</p>}
+                  </div>
                 </div>
-                <div className="vc-doc-body">
-                  <p className="vc-doc-name">{filename}</p>
-                  {meta && <p className="vc-doc-meta">{meta}</p>}
-                </div>
-              </div>
-            );
-          }) : (
+              );
+            })
+          ) : (
             <p className="vc-docs-empty">No reference files attached</p>
           )}
         </div>
@@ -208,13 +211,24 @@ function SessionContextContent({ persona, docs }) {
   );
 }
 
-function AuraVisualizer({ state, muted, isCapturing, onToggleCapture }) {
-  const auraState = (muted || !isCapturing) ? 'aura-muted'
-    : state === 'listening' ? 'aura-listening'
-    : state === 'speaking' ? 'aura-speaking'
-    : state === 'processing' ? 'aura-thinking'
-    : state === 'idle' ? 'aura-idle'
-    : 'aura-muted';
+function AuraVisualizer({
+  state,
+  muted,
+  isCapturing,
+  onToggleCapture,
+}) {
+  const auraState =
+    muted || !isCapturing
+      ? 'aura-muted'
+      : state === 'listening'
+      ? 'aura-listening'
+      : state === 'speaking'
+      ? 'aura-speaking'
+      : state === 'processing'
+      ? 'aura-thinking'
+      : state === 'idle'
+      ? 'aura-idle'
+      : 'aura-muted';
 
   const lineElements = [
     { x1: 100, y1: 24, x2: 100, y2: 38, stroke: '#03191e', width: 2 },
@@ -278,7 +292,7 @@ function AuraVisualizer({ state, muted, isCapturing, onToggleCapture }) {
                 'vc-aura-mic-btn',
                 !isCapturing && 'vc-aura-mic-btn--muted'
               )}
-              aria-label={isCapturing ? 'Turn off microphone' : 'Turn on microphone'}
+              aria-label={isCapturing ? 'Mute microphone' : 'Unmute microphone'}
               onClick={onToggleCapture}
             >
               <span className="vc-aura-mic-icon">
@@ -287,7 +301,7 @@ function AuraVisualizer({ state, muted, isCapturing, onToggleCapture }) {
             </button>
           </TooltipTrigger>
           <TooltipContent side="top">
-            {isCapturing ? 'Turn off microphone' : 'Turn on microphone'}
+            {isCapturing ? 'Mute microphone' : 'Unmute microphone'}
           </TooltipContent>
         </Tooltip>
       </div>
@@ -295,10 +309,9 @@ function AuraVisualizer({ state, muted, isCapturing, onToggleCapture }) {
   );
 }
 
-export default function VoiceCallScreen() {
-  const { sessionId: routeSessionId } = useParams();
-  const navigate = useNavigate();
-
+export default function VoiceCallScreen({
+  onEndCallCallback,
+}) {
   const {
     status,
     connectionStatus,
@@ -317,14 +330,13 @@ export default function VoiceCallScreen() {
 
   const uploadedDocuments = useCallStore((s) => s.uploadedDocuments);
   const [textInput, setTextInput] = useState('');
-  const [activeTab, setActiveTab] = useState('call'); // 'call' | 'transcript'
+  const [activeTab, setActiveTab] = useState('call');
   const [isContextDrawerOpen, setIsContextDrawerOpen] = useState(false);
-  const [copied, setCopied] = useState(false);
 
   const initializedRef = useRef(false);
   const transcriptEndRef = useRef(null);
 
-  // Auto-close context drawer if screen is resized to desktop (>= 1024px)
+  // Auto-close context drawer if screen is resized to desktop (>= 1024px) where right sidebar is permanently visible
   useEffect(() => {
     const handleResize = () => {
       if (window.innerWidth >= 1024) {
@@ -347,14 +359,11 @@ export default function VoiceCallScreen() {
   }, [isContextDrawerOpen]);
 
   useEffect(() => {
-    if (!initializedRef.current && routeSessionId && status === 'idle') {
+    if (!initializedRef.current && status === 'idle') {
       initializedRef.current = true;
-      const doInit = async () => {
-        await startCall(routeSessionId);
-      };
-      doInit();
+      startCall();
     }
-  }, [routeSessionId, startCall, status]);
+  }, [startCall, status]);
 
   useEffect(() => {
     if (transcriptEndRef.current) {
@@ -364,12 +373,8 @@ export default function VoiceCallScreen() {
 
   const handleEndCall = useCallback(() => {
     stopCall();
-    if (routeSessionId) {
-      navigate(`/review/${routeSessionId}`);
-    } else {
-      navigate('/session');
-    }
-  }, [stopCall, navigate, routeSessionId]);
+    onEndCallCallback?.();
+  }, [stopCall, onEndCallCallback]);
 
   const handleSendText = useCallback(() => {
     const trimmed = textInput.trim();
@@ -379,73 +384,34 @@ export default function VoiceCallScreen() {
   }, [textInput, sendTextFallback]);
 
   const handleToggleCapture = useCallback(() => {
-    console.info('[voice] toggleCapture click; isCapturing=', isCapturing, 'status=', status);
     toggleCapture();
-  }, [toggleCapture, isCapturing, status]);
+  }, [toggleCapture]);
 
-  const handleKeyDown = useCallback((e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      handleSendText();
-    }
-  }, [handleSendText]);
-
-  const handleCopyTranscript = useCallback(() => {
-    if (!transcript || transcript.length === 0) return;
-    const text = transcript
-      .map((t) => `[${new Date(t.timestamp).toLocaleTimeString()}] ${t.role === 'user' ? 'You' : 'Aura'}: ${t.text}`)
-      .join('\n\n');
-    navigator.clipboard?.writeText(text).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    }).catch((err) => {
-      console.error('Failed to copy', err);
-    });
-  }, [transcript]);
-
-  const handleExportTranscript = useCallback(() => {
-    if (!transcript || transcript.length === 0) return;
-    const personaObj = getPersona(selectedPersona);
-    const personaTitle = personaObj?.name ? `Session with ${personaObj.name}` : 'Voice Session';
-    const header = `${personaTitle}\nDate: ${new Date().toLocaleString()}\nSession ID: ${routeSessionId || 'N/A'}\n${'='.repeat(40)}\n\n`;
-    const body = transcript
-      .map((t) => `[${new Date(t.timestamp).toLocaleTimeString()}] ${t.role === 'user' ? 'You' : 'Aura'}:\n${t.text}`)
-      .join('\n\n');
-    const blob = new Blob([header + body], { type: 'text/plain;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `aura-session-${routeSessionId || 'transcript'}.txt`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-  }, [transcript, selectedPersona, routeSessionId]);
+  const handleKeyDown = useCallback(
+    (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        handleSendText();
+      }
+    },
+    [handleSendText]
+  );
 
   const isAiSpeaking = status === 'speaking';
   const isProcessing = status === 'processing';
   const isListening = status === 'listening';
   const isConnected = connectionStatus === 'connected' || connectionStatus === 'authenticated';
 
-  const connectionLabel = connectionStatus === 'connected' && 'Connected'
-    || connectionStatus === 'connecting' && 'Connecting...'
-    || connectionStatus === 'authenticated' && 'Authenticated'
-    || connectionStatus === 'error' && 'Connection error'
-    || connectionStatus === 'disconnected' && 'Disconnected'
-    || 'Unknown';
+  const connectionLabel =
+    (connectionStatus === 'connected' && 'Connected') ||
+    (connectionStatus === 'connecting' && 'Connecting...') ||
+    (connectionStatus === 'authenticated' && 'Authenticated') ||
+    (connectionStatus === 'error' && 'Connection error') ||
+    (connectionStatus === 'disconnected' && 'Disconnected') ||
+    'Unknown';
 
   const persona = getPersona(selectedPersona);
   const docs = uploadedDocuments || [];
-
-  const latestMessage = useMemo(() => {
-    if (filler) {
-      return { role: 'assistant', text: filler, isFiller: true };
-    }
-    if (transcript && transcript.length > 0) {
-      return transcript[transcript.length - 1];
-    }
-    return null;
-  }, [transcript, filler]);
 
   return (
     <div className="voice-call-screen">
@@ -454,33 +420,39 @@ export default function VoiceCallScreen() {
         <div className="vc-app-bar-inner">
           <div className="vc-app-bar-left">
             <div className="vc-app-bar-brand">
-              <div className="vc-app-bar-logo" aria-hidden="true">A</div>
+              <div className="vc-app-bar-logo" aria-hidden="true">
+                A
+              </div>
               <span className="vc-app-bar-title">Aura</span>
             </div>
             {persona && (
               <button
                 type="button"
-                onClick={() => setIsContextDrawerOpen(true)}
-                className="vc-app-bar-persona hidden sm:flex lg:pointer-events-none items-center gap-1.5 text-xs text-white/70 pl-3 border-l border-white/10 hover:text-white transition-colors cursor-pointer lg:cursor-default"
-                title="View persona details"
+                onClick={() => {
+                  if (window.innerWidth < 1024) {
+                    setIsContextDrawerOpen(true);
+                  }
+                }}
+                className="vc-app-bar-persona hidden sm:flex lg:pointer-events-none items-center gap-1.5 text-xs text-white/75 hover:text-white transition-colors cursor-pointer lg:cursor-default"
+                title="Persona details (visible in right sidebar on desktop, or tap to open)"
               >
-                <span className="font-semibold text-white/90">{persona.name}</span>
-                <span className="text-white/40">•</span>
-                <span className="text-white/60">{persona.role}</span>
+                <span className="font-semibold text-white/95">{persona.name}</span>
+                <span className="text-white/35">•</span>
+                <span className="text-white/60 truncate max-w-[120px] sm:max-w-[160px]">{persona.role}</span>
               </button>
             )}
           </div>
           <div className="vc-app-bar-right">
-            {/* Context side bar toggle button: active for all screens except desktop (lg:hidden) */}
+            {/* Context button: visible and active on tablet (700px - 1023px) to open session context drawer. Hidden on mobile (< 700px) and desktop (>= 1024px) */}
             <Button
               variant="outline"
               size="sm"
               onClick={() => setIsContextDrawerOpen(true)}
-              className="vc-context-toggle-btn inline-flex lg:hidden"
-              aria-label="Open session context sidebar"
+              className="vc-context-toggle-btn"
+              aria-label="Open session context sidebar from right"
             >
               <InfoIcon />
-              <span>Context</span>
+              <span className="hidden sm:inline">Context</span>
               {docs.length > 0 && (
                 <span className="vc-context-toggle-badge">{docs.length}</span>
               )}
@@ -488,13 +460,13 @@ export default function VoiceCallScreen() {
 
             <div className="vc-connection-indicator">
               <span className={`vc-connection-dot ${connectionStatus}`} />
-              <span className="vc-connection-label">{connectionLabel}</span>
+              <span className="vc-connection-label hidden sm:inline">{connectionLabel}</span>
             </div>
           </div>
         </div>
       </header>
 
-      {/* ─── Mobile View Tabs (Visible only on < 768px) ────────────── */}
+      {/* ─── Mobile View Tabs (Visible only on < 700px) ────────────── */}
       <nav className="vc-mobile-nav" aria-label="Call views">
         <div className="vc-mobile-tabs" role="tablist">
           <button
@@ -502,33 +474,42 @@ export default function VoiceCallScreen() {
             role="tab"
             aria-selected={activeTab === 'call'}
             className={cn('vc-mobile-tab-btn', activeTab === 'call' && 'vc-mobile-tab-btn--active')}
-            onClick={() => setActiveTab('call')}
+            onClick={() => {
+              setActiveTab('call');
+              setIsContextDrawerOpen(false);
+            }}
           >
             <TabIcon tab="call" />
-            <span>Call</span>
+            <span className="vc-mobile-tab-label">Voice Call</span>
           </button>
           <button
             type="button"
             role="tab"
             aria-selected={activeTab === 'transcript'}
             className={cn('vc-mobile-tab-btn', activeTab === 'transcript' && 'vc-mobile-tab-btn--active')}
-            onClick={() => setActiveTab('transcript')}
+            onClick={() => {
+              setActiveTab('transcript');
+              setIsContextDrawerOpen(false);
+            }}
           >
             <TabIcon tab="transcript" />
-            <span>Transcript</span>
+            <span className="vc-mobile-tab-label">Transcript</span>
             {transcript.length > 0 && (
               <span className="vc-mobile-tab-badge">{transcript.length}</span>
             )}
           </button>
           <button
             type="button"
-            role="button"
-            aria-label="Open session context sidebar"
-            className={cn('vc-mobile-tab-btn', isContextDrawerOpen && 'vc-mobile-tab-btn--active')}
-            onClick={() => setIsContextDrawerOpen(true)}
+            role="tab"
+            aria-selected={activeTab === 'context'}
+            className={cn('vc-mobile-tab-btn', activeTab === 'context' && 'vc-mobile-tab-btn--active')}
+            onClick={() => {
+              setActiveTab('context');
+              setIsContextDrawerOpen(false);
+            }}
           >
             <TabIcon tab="context" />
-            <span>Context</span>
+            <span className="vc-mobile-tab-label">Context</span>
             {docs.length > 0 && (
               <span className="vc-mobile-tab-badge">{docs.length}</span>
             )}
@@ -541,70 +522,36 @@ export default function VoiceCallScreen() {
         <div className="vc-error-banner" role="alert">
           <span className="vc-error-icon">!</span>
           <span className="vc-error-text">{error}</span>
-          <button className="vc-error-dismiss" onClick={() => setError(null)} aria-label="Dismiss error">×</button>
+          <button className="vc-error-dismiss" onClick={() => setError(null)} aria-label="Dismiss error">
+            ×
+          </button>
         </div>
       )}
 
       {/* ─── Main Workspace ─────────────────────────────────────────── */}
       <main className="vc-main">
-        {/* ─── LEFT: Transcript ─────────────────────────────────────── */}
-        <section className={cn('vc-transcript-column', activeTab !== 'transcript' && 'hidden md:flex')}>
+        {/* ─── LEFT: Transcript Column ─────────────────────────────────────── */}
+        <section
+          className={cn(
+            'vc-transcript-column',
+            activeTab !== 'transcript' && 'vc-mobile-hidden'
+          )}
+        >
           <div className="vc-transcript-header">
             <div className="vc-transcript-header-left">
-              <span className="vc-column-title">Conversation</span>
+              <span className="vc-column-title">Live Transcription</span>
               <span className="vc-column-sep">•</span>
-              <span className="vc-column-subtitle">Notes &amp; Flow</span>
+              <span className="vc-column-subtitle">Conversation &amp; Notes</span>
             </div>
-            <div className="vc-transcript-header-right">
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    className="vc-icon-btn"
-                    aria-label="Copy conversation"
-                    onClick={handleCopyTranscript}
-                    disabled={transcript.length === 0}
-                  >
-                    {copied ? (
-                      <CheckIcon />
-                    ) : (
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
-                        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-                      </svg>
-                    )}
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">{copied ? 'Copied to clipboard!' : 'Copy conversation'}</TooltipContent>
-              </Tooltip>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    className="vc-icon-btn"
-                    aria-label="Export notes"
-                    onClick={handleExportTranscript}
-                    disabled={transcript.length === 0}
-                  >
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <circle cx="18" cy="5" r="3" />
-                      <circle cx="6" cy="12" r="3" />
-                      <circle cx="18" cy="19" r="3" />
-                      <line x1="8.59" y1="13.51" x2="15.42" y2="17.49" />
-                      <line x1="15.41" y1="6.51" x2="8.59" y2="10.49" />
-                    </svg>
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">Export notes</TooltipContent>
-              </Tooltip>
-            </div>
+            {transcript.length > 0 && (
+              <span className="vc-context-toggle-badge">{transcript.length}</span>
+            )}
           </div>
           <div className="vc-transcript-scroll">
             {transcript.length === 0 && !filler && (
               <div className="vc-transcript-empty">
-                <p>No messages yet. Start speaking or type below.</p>
+                <p className="font-semibold text-xs text-[#03191e]/80 mb-1">Live Transcript Active</p>
+                <p>Spoken dialogue and user notes will stream here in real time as you speak.</p>
               </div>
             )}
             {filler && (
@@ -624,17 +571,27 @@ export default function VoiceCallScreen() {
             {transcript.map((entry) => (
               <div
                 key={entry.id}
-                className={`vc-chat-bubble ${entry.role === 'user' ? 'vc-chat-bubble--user' : 'vc-chat-bubble--assistant'}`}
+                className={cn(
+                  'vc-chat-bubble',
+                  entry.role === 'user' ? 'vc-chat-bubble--user' : 'vc-chat-bubble--assistant'
+                )}
               >
                 <div className="vc-chat-meta">
-                  <span className="vc-chat-name">
-                    {entry.role === 'user' ? 'You' : 'Aura'}
-                  </span>
+                  <span className="vc-chat-name">{entry.role === 'user' ? 'You' : 'Aura'}</span>
                   <span className="vc-chat-time">
-                    {new Date(entry.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                    {new Date(entry.timestamp).toLocaleTimeString([], {
+                      hour: '2-digit',
+                      minute: '2-digit',
+                      second: '2-digit',
+                    })}
                   </span>
                 </div>
-                <div className={`vc-chat-body ${entry.role === 'user' ? 'vc-chat-body--user' : 'vc-chat-body--assistant'}`}>
+                <div
+                  className={cn(
+                    'vc-chat-body',
+                    entry.role === 'user' ? 'vc-chat-body--user' : 'vc-chat-body--assistant'
+                  )}
+                >
                   {entry.text}
                 </div>
               </div>
@@ -643,21 +600,26 @@ export default function VoiceCallScreen() {
           </div>
         </section>
 
-        {/* ─── CENTER: Aura Visualizer ──────────────────────────────── */}
-        <section className={cn('vc-aura-column', activeTab !== 'call' && 'hidden md:flex')}>
+        {/* ─── CENTER: Aura Visualizer Column ──────────────────────────────── */}
+        <section
+          className={cn(
+            'vc-aura-column',
+            activeTab !== 'call' && 'vc-mobile-hidden'
+          )}
+        >
           <div className="vc-aura-wrapper">
-            {/* Soft ambient backdrop */}
+            {/* Ambient soft glow rings */}
             <div className="vc-aura-backdrop-outer" aria-hidden="true" />
             <div className="vc-aura-backdrop-inner" aria-hidden="true" />
-            <AuraVisualizer 
-              state={muted || !isCapturing ? 'muted' : status} 
+            <AuraVisualizer
+              state={muted || !isCapturing ? 'muted' : status}
               muted={muted || !isCapturing}
               isCapturing={isCapturing}
               onToggleCapture={handleToggleCapture}
             />
           </div>
 
-          {/* Status indicator */}
+          {/* Real-time status indicator */}
           <div className="vc-status-chip">
             <div className="vc-wave-bars" aria-hidden="true">
               {(isAiSpeaking || isListening || isProcessing) && (
@@ -672,51 +634,55 @@ export default function VoiceCallScreen() {
             </div>
             <span className="vc-status-text">
               {isAiSpeaking && 'Aura is speaking...'}
-              {isProcessing && !isAiSpeaking && 'Processing...'}
-              {isListening && isCapturing && 'Listening...'}
+              {isProcessing && !isAiSpeaking && 'Processing thought...'}
+              {isListening && isCapturing && 'Listening to you...'}
               {!isAiSpeaking && !isProcessing && !isListening && !isConnected && 'Disconnected'}
-              {!isAiSpeaking && !isProcessing && !isListening && isConnected && !isCapturing && 'idle'}
+              {!isAiSpeaking && !isProcessing && !isListening && isConnected && !isCapturing && 'Microphone muted'}
+              {!isAiSpeaking && !isProcessing && !isListening && isConnected && isCapturing && 'Ready & listening'}
             </span>
           </div>
 
-          <p className="vc-aura-hint">
-            Click the orb to speak, then turn off to proceed
-          </p>
+          {/* Microphone Status Pill */}
+          <button
+            type="button"
+            onClick={handleToggleCapture}
+            className={cn(
+              'vc-mic-status-pill',
+              isCapturing && !muted ? 'vc-mic-status-pill--active' : 'vc-mic-status-pill--muted'
+            )}
+            title={isCapturing && !muted ? 'Click to mute microphone' : 'Click to unmute microphone'}
+          >
+            <span className={cn('w-2 h-2 rounded-full', isCapturing && !muted ? 'bg-emerald-500' : 'bg-red-500 animate-pulse')} />
+            <span>{isCapturing && !muted ? 'Microphone Active' : 'Microphone Muted (Tap to speak)'}</span>
+          </button>
 
-          {/* Mobile Live Floating Caption */}
-          {latestMessage && (
-            <div
-              className="vc-mobile-caption md:hidden"
-              onClick={() => setActiveTab('transcript')}
-              role="button"
-              tabIndex={0}
-              onKeyDown={(e) => e.key === 'Enter' && setActiveTab('transcript')}
-              aria-label="View message in transcript"
-            >
-              <div className="vc-mobile-caption-meta">
-                <span className="vc-mobile-caption-role">{latestMessage.role === 'user' ? 'You' : 'Aura'}</span>
-                <span className="vc-mobile-caption-link">View all ({transcript.length}) →</span>
-              </div>
-              <p className="vc-mobile-caption-text">
-                {latestMessage.text}
-                {latestMessage.isFiller && <span className="vc-chat-cursor" aria-hidden="true" />}
-              </p>
-            </div>
-          )}
+          <p className="vc-aura-hint">
+            Tap the orb or mic status to toggle speech, or type notes below.
+          </p>
         </section>
 
-        {/* ─── RIGHT: Session Context (Permanent sidebar on desktop only) ─── */}
-        <section className="vc-context-column hidden lg:flex">
+        {/* ─── RIGHT: Session Context (Permanent sidebar on right) ─── */}
+        <section
+          className={cn(
+            'vc-context-column',
+            activeTab !== 'context' && 'vc-mobile-hidden'
+          )}
+        >
           <div className="vc-context-card">
-            <div className="vc-context-header">
-              <span className="vc-context-header-title">Session Context</span>
+            <div className="vc-context-header flex items-center justify-between">
+              <div className="flex items-center gap-1.5">
+                <span className="vc-context-header-title">Session Context</span>
+                <span className="vc-column-sep">•</span>
+                <span className="vc-column-subtitle">Briefs &amp; Documents</span>
+              </div>
+              <span className="vc-context-toggle-badge">{docs.length}</span>
             </div>
             <SessionContextContent persona={persona} docs={docs} />
           </div>
         </section>
       </main>
 
-      {/* ─── Tablet / Mobile Context Drawer ───────────────────────── */}
+      {/* ─── Tablet / Mobile Context Slide-over Drawer ───────────────────────── */}
       {isContextDrawerOpen && (
         <>
           <div
@@ -724,7 +690,12 @@ export default function VoiceCallScreen() {
             onClick={() => setIsContextDrawerOpen(false)}
             aria-hidden="true"
           />
-          <div className="vc-drawer-panel" role="dialog" aria-modal="true" aria-label="Session Context">
+          <div
+            className="vc-drawer-panel"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Session Context"
+          >
             <div className="vc-drawer-header">
               <h2 className="vc-drawer-title">Session Context</h2>
               <button
@@ -744,16 +715,14 @@ export default function VoiceCallScreen() {
       {/* ─── Bottom Control Dock ─────────────────────────────────────── */}
       <footer className="vc-controls-bar">
         <div className="vc-controls-inner">
-          {/* Left spacer for symmetry on large screens */}
-          <div className="vc-controls-left hidden lg:flex" />
-
-          {/* Center: Fallback Text Input */}
+          {/* Center: Note Input */}
           <div className="vc-controls-center">
+            {/* Note / Text Fallback Input */}
             <div className="vc-text-input-wrapper">
               <input
                 type="text"
                 className="vc-text-input"
-                placeholder="Type a message or note for Aura..."
+                placeholder="Type note or message for Aura..."
                 value={textInput}
                 onChange={(e) => setTextInput(e.target.value)}
                 onKeyDown={handleKeyDown}
@@ -790,11 +759,11 @@ export default function VoiceCallScreen() {
                 <AlertDialogHeader>
                   <AlertDialogTitle>End this call?</AlertDialogTitle>
                   <AlertDialogDescription>
-                    This will disconnect the voice session and return you to the setup screen. Any unsaved context will be cleared.
+                    This will disconnect the voice session and wrap up the call. Your transcript and references will be archived into your session debrief.
                   </AlertDialogDescription>
                 </AlertDialogHeader>
                 <AlertDialogFooter>
-                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                  <AlertDialogCancel>Resume Call</AlertDialogCancel>
                   <AlertDialogAction onClick={handleEndCall}>End Call</AlertDialogAction>
                 </AlertDialogFooter>
               </AlertDialogContent>
