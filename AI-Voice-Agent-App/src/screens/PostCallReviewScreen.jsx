@@ -400,7 +400,12 @@ export default function PostCallReviewScreen() {
               <div className="mt-2 text-sm text-muted-foreground">Finalizing session...</div>
             )}
           </div>
-          <Button variant="outline" size="sm" onClick={() => navigate('/session')}>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => navigate('/session')}
+            className="post-call-header-button"
+          >
             New Session
           </Button>
         </header>
@@ -458,7 +463,7 @@ export default function PostCallReviewScreen() {
         </Card>
 
         {/* Sentiment & Engagement Flow */}
-        <Card>
+        <Card className="post-call-section-card">
           <CardHeader>
             <CardTitle>Sentiment & Engagement Flow</CardTitle>
             <CardDescription>Timeline markers highlight key moments</CardDescription>
@@ -497,7 +502,7 @@ export default function PostCallReviewScreen() {
         </Card>
 
         {/* Meeting Overview */}
-        <Card>
+        <Card className="post-call-section-card">
           <CardHeader>
             <CardTitle>Meeting Overview</CardTitle>
           </CardHeader>
@@ -540,7 +545,7 @@ export default function PostCallReviewScreen() {
         </Card>
 
         {/* Key Takeaways & Agreed Decisions */}
-        <Card>
+        <Card className="post-call-section-card">
           <CardHeader>
             <CardTitle>Key Takeaways & Agreed Decisions</CardTitle>
           </CardHeader>
@@ -584,7 +589,7 @@ export default function PostCallReviewScreen() {
         </Card>
 
         {/* Call Metrics */}
-        <Card>
+        <Card className="post-call-section-card">
           <CardHeader>
             <CardTitle>Call Metrics</CardTitle>
           </CardHeader>
@@ -619,7 +624,7 @@ export default function PostCallReviewScreen() {
         </Card>
 
         {/* Conversation Transcript */}
-        <Card>
+        <Card className="post-call-section-card">
           <CardHeader>
             <div className="post-call-transcript-header">
               <div>
@@ -686,7 +691,7 @@ export default function PostCallReviewScreen() {
         </Card>
 
         {/* Export */}
-        <Card>
+        <Card className="post-call-section-card">
           <CardHeader>
             <CardTitle>Export</CardTitle>
           </CardHeader>
