@@ -16,7 +16,7 @@ services:
       args:
         VITE_API_URL: ${VITE_API_URL:-http://localhost:8001}
     ports:
-      - "3000:5178"
+      - "3888:5178"
     env_file:
       - ./AI-Voice-Agent-App/.env
     restart: always
