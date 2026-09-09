@@ -1,0 +1,26 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "8001:8001"
+    env_file:
+      - ./backend/.env
+    restart: always
+
+  frontend:
+    build:
+      context: ./AI-Voice-Agent-App
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: ${VITE_API_URL:-http://localhost:8001}
+    ports:
+      - "5173:5173"
+    env_file:
+      - ./AI-Voice-Agent-App/.env
+    restart: always
+    depends_on:
+      - backend

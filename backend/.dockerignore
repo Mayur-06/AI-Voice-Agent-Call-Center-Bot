@@ -1,0 +1,11 @@
+myvenv
+.git
+.gitignore
+__pycache__
+*.pyc
+logs
+.env
+node_modules
+dist
+Dockerfile
+.dockerignore

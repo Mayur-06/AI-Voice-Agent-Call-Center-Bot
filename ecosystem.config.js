@@ -1,0 +1,41 @@
+module.exports = {
+  apps: [
+    {
+      name: 'voice-agent-frontend',
+      cwd: './AI-Voice-Agent-App',
+      script: 'npx',
+      args: 'serve -s dist -l 5173',
+      env: {
+        NODE_ENV: 'production',
+        PORT: 5173,
+      },
+      instances: 1,
+      autorestart: true,
+      watch: false,
+      max_memory_restart: '500M',
+      error_file: '/home/your-user/ai-voice-agent/logs/frontend-error.log',
+      out_file: '/home/your-user/ai-voice-agent/logs/frontend-out.log',
+      log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
+      merge_logs: true,
+    },
+    {
+      name: 'voice-agent-backend',
+      cwd: './backend',
+      script: 'python',
+      args: '-m uvicorn app.main:app --host 0.0.0.0 --port 8001 --workers 4',
+      interpreter: './myvenv/bin/python',
+      env: {
+        PYTHONPATH: '.',
+        ENVIRONMENT: 'production',
+      },
+      instances: 1,
+      autorestart: true,
+      watch: false,
+      max_memory_restart: '1G',
+      error_file: '/home/your-user/ai-voice-agent/logs/backend-error.log',
+      out_file: '/home/your-user/ai-voice-agent/logs/backend-out.log',
+      log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
+      merge_logs: true,
+    },
+  ],
+};
