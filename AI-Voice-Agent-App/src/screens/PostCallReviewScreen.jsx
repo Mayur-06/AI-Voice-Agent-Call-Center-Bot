@@ -10,6 +10,7 @@ import { Separator } from '@/components/ui/separator';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid } from 'recharts';
+import { Progress } from '@/components/ui/progress';
 import { cn } from '@/lib/utils';
 
 const sentimentChartConfig = {
@@ -43,6 +44,7 @@ export default function PostCallReviewScreen() {
   const [searchQuery, setSearchQuery] = useState('');
   const [copied, setCopied] = useState(false);
   const [waitingForEnd, setWaitingForEnd] = useState(false);
+  const [reviewProgress, setReviewProgress] = useState(0);
   const audioRef = useRef(null);
   const recordingUrlRef = useRef(recordingUrl);
 
@@ -122,6 +124,25 @@ export default function PostCallReviewScreen() {
       if (recordingUrlRef.current) URL.revokeObjectURL(recordingUrlRef.current);
     };
   }, [sessionId]);
+
+  useEffect(() => {
+    if (!sessionId) return;
+
+    if (!waitingForEnd) {
+      setReviewProgress(100);
+      return;
+    }
+
+    setReviewProgress(15);
+    const start = Date.now();
+    const timer = setInterval(() => {
+      const elapsed = Date.now() - start;
+      const nextProgress = Math.min(95, 15 + Math.round((elapsed / 9000) * 80));
+      setReviewProgress(nextProgress);
+    }, 250);
+
+    return () => clearInterval(timer);
+  }, [sessionId, waitingForEnd]);
 
   useEffect(() => {
     if (!sessionId || !waitingForEnd) return;
@@ -221,12 +242,33 @@ export default function PostCallReviewScreen() {
     setCurrentTime(seconds);
   };
 
+  const triggerDownload = async (url, fallbackFilename) => {
+    const response = await fetch(url);
+    if (!response.ok) {
+      throw new Error('Export request failed');
+    }
+
+    const blob = await response.blob();
+    const disposition = response.headers.get('content-disposition') || '';
+    const match = disposition.match(/filename\s*=\s*"?([^";]+)"?/i);
+    const filename = match ? decodeURIComponent(match[1]) : fallbackFilename;
+
+    const objectUrl = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = objectUrl;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(objectUrl);
+  };
+
   const handleExportTranscript = async (format) => {
     setExportLoading(true);
     setExportError(null);
     try {
       const url = `${API_BASE}/api/sessions/${sessionId}/export/transcript?format=${format}`;
-      window.open(url, '_blank');
+      await triggerDownload(url, `session-${sessionId}-transcript.${format}`);
     } catch {
       setExportError('Failed to export transcript');
     } finally {
@@ -239,7 +281,7 @@ export default function PostCallReviewScreen() {
     setExportError(null);
     try {
       const url = `${API_BASE}/api/sessions/${sessionId}/export/recording?format=${format}`;
-      window.open(url, '_blank');
+      await triggerDownload(url, `session-${sessionId}-recording.${format}`);
     } catch {
       setExportError('Failed to export recording');
     } finally {
@@ -252,7 +294,7 @@ export default function PostCallReviewScreen() {
     setExportError(null);
     try {
       const url = `${API_BASE}/api/sessions/${sessionId}/export/summary?format=${format}`;
-      window.open(url, '_blank');
+      await triggerDownload(url, `session-${sessionId}-summary.${format}`);
     } catch {
       setExportError('Failed to export summary');
     } finally {
@@ -378,17 +420,137 @@ export default function PostCallReviewScreen() {
   const actionItems = summaryObj?.action_items || [];
   const keyTopics = summaryObj?.key_topics || [];
 
-  if (loading && !session) return <div className="p-6">Loading review...</div>;
+  if (loading && !session) {
+    return (
+      <div className="post-call-screen">
+        <header className="session-setup-header">
+          <div className="session-setup-header-brand">
+            <div className="session-setup-header-avatar" aria-hidden="true">A</div>
+            <span className="session-setup-header-title">Aura</span>
+          </div>
+          <div className="session-setup-header-nav">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => navigate('/session')}
+              className="text-xs font-medium"
+              style={{ color: 'rgba(251, 251, 255, 0.8)' }}
+            >
+              Sessions
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled
+              className="text-xs font-medium opacity-50 cursor-not-allowed"
+              style={{ color: 'rgba(251, 251, 255, 0.8)' }}
+            >
+              Analytics
+            </Button>
+          </div>
+        </header>
+
+        <main className="post-call-main post-call-main--centered">
+          <div className="post-call-loading-card">
+            <h2 className="post-call-loading-title">Preparing your review</h2>
+            <p className="post-call-loading-text">
+              We&apos;re finalizing your session details and gathering the latest insights.
+            </p>
+            <Progress value={reviewProgress} className="post-call-progress" />
+          </div>
+        </main>
+      </div>
+    );
+  }
+
   if (error) return <div className="p-6 text-red-500">{error}</div>;
   if (!session) return <div className="p-6">Session not found.</div>;
 
+  if (waitingForEnd) {
+    return (
+      <div className="post-call-screen">
+        <header className="session-setup-header">
+          <div className="session-setup-header-brand">
+            <div className="session-setup-header-avatar" aria-hidden="true">A</div>
+            <span className="session-setup-header-title">Aura</span>
+          </div>
+          <div className="session-setup-header-nav">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => navigate('/session')}
+              className="text-xs font-medium"
+              style={{ color: 'rgba(251, 251, 255, 0.8)' }}
+            >
+              Sessions
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled
+              className="text-xs font-medium opacity-50 cursor-not-allowed"
+              style={{ color: 'rgba(251, 251, 255, 0.8)' }}
+            >
+              Analytics
+            </Button>
+          </div>
+        </header>
+
+        <main className="post-call-main post-call-main--centered">
+          <div className="post-call-loading-card">
+            <h2 className="post-call-loading-title">Preparing your review</h2>
+            <p className="post-call-loading-text">
+              We&apos;re finalizing your session details and gathering the latest insights.
+            </p>
+            <Progress value={reviewProgress} className="post-call-progress" />
+          </div>
+        </main>
+      </div>
+    );
+  }
+
   return (
     <div className="post-call-screen">
+      <header className="session-setup-header">
+        <div className="session-setup-header-brand">
+          <div className="session-setup-header-avatar" aria-hidden="true">A</div>
+          <span className="session-setup-header-title">Aura</span>
+        </div>
+        <div className="session-setup-header-nav">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => navigate('/session')}
+            className="text-xs font-medium"
+            style={{ color: 'rgba(251, 251, 255, 0.8)' }}
+          >
+            Sessions
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled
+            className="text-xs font-medium opacity-50 cursor-not-allowed"
+            style={{ color: 'rgba(251, 251, 255, 0.8)' }}
+          >
+            Analytics
+          </Button>
+        </div>
+      </header>
+
       <div className="post-call-main">
+        <div className="post-call-intro">
+          <span className="session-setup-intro-label">Understand</span>
+          <h1 className="session-setup-intro-title">Session Debrief</h1>
+          <p className="session-setup-intro-desc">
+            Replay the call, inspect how the conversation unfolded, and review the decisions and metrics generated from the session.
+          </p>
+        </div>
+
         {/* Header */}
         <header className="post-call-header">
           <div className="post-call-header-left">
-            <h1 className="post-call-title">Post-Call Review</h1>
+            <h2 className="post-call-title">Post-Call Review</h2>
             <div className="post-call-header-meta">
               <span className="post-call-session-title">Session with {personaName}</span>
               <span className="post-call-meta-sep">·</span>
@@ -397,10 +559,15 @@ export default function PostCallReviewScreen() {
               <span className="post-call-meta-text">{sessionDuration}</span>
             </div>
             {waitingForEnd && (
-              <div className="mt-2 text-sm text-muted-foreground">Finalizing session...</div>
+              <div className="post-call-finalizing">Finalizing session...</div>
             )}
           </div>
-          <Button variant="outline" size="sm" onClick={() => navigate('/session')}>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => navigate('/session')}
+            className="post-call-header-button"
+          >
             New Session
           </Button>
         </header>
@@ -458,7 +625,7 @@ export default function PostCallReviewScreen() {
         </Card>
 
         {/* Sentiment & Engagement Flow */}
-        <Card>
+        <Card className="post-call-section-card">
           <CardHeader>
             <CardTitle>Sentiment & Engagement Flow</CardTitle>
             <CardDescription>Timeline markers highlight key moments</CardDescription>
@@ -497,7 +664,7 @@ export default function PostCallReviewScreen() {
         </Card>
 
         {/* Meeting Overview */}
-        <Card>
+        <Card className="post-call-section-card">
           <CardHeader>
             <CardTitle>Meeting Overview</CardTitle>
           </CardHeader>
@@ -540,7 +707,7 @@ export default function PostCallReviewScreen() {
         </Card>
 
         {/* Key Takeaways & Agreed Decisions */}
-        <Card>
+        <Card className="post-call-section-card">
           <CardHeader>
             <CardTitle>Key Takeaways & Agreed Decisions</CardTitle>
           </CardHeader>
@@ -584,7 +751,7 @@ export default function PostCallReviewScreen() {
         </Card>
 
         {/* Call Metrics */}
-        <Card>
+        <Card className="post-call-section-card">
           <CardHeader>
             <CardTitle>Call Metrics</CardTitle>
           </CardHeader>
@@ -619,7 +786,7 @@ export default function PostCallReviewScreen() {
         </Card>
 
         {/* Conversation Transcript */}
-        <Card>
+        <Card className="post-call-section-card">
           <CardHeader>
             <div className="post-call-transcript-header">
               <div>
@@ -686,7 +853,7 @@ export default function PostCallReviewScreen() {
         </Card>
 
         {/* Export */}
-        <Card>
+        <Card className="post-call-section-card">
           <CardHeader>
             <CardTitle>Export</CardTitle>
           </CardHeader>

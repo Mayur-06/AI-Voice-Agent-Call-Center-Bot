@@ -11,7 +11,7 @@ from app.services.stt import transcribe_audio, is_noisy_transcription
 from app.services.audio_processor import decode_to_pcm, pcm_to_wav, compose_call_recording
 from app.services.rag import requires_rag, retrieve_relevant_chunks
 from app.services.llm import generate_response_stream, get_persona_system_prompt
-from app.services.sentiment_analyzer import analyze_sentiment
+from app.services.sentiment_analyzer import analyze_sentiment, save_sentiment
 from app.services.sentences import split_sentences
 from app.services.tts import synthesize_speech_stream, strip_markdown
 from app.services.session import save_turn
@@ -211,6 +211,11 @@ async def _run_llm_turn(
 
     try:
         sentiment = await analyze_sentiment(msg.text)
+        if user_message_id:
+            try:
+                await save_sentiment(state.db_session_id, user_message_id, sentiment)
+            except Exception:
+                pass
         safe_put_nowait(state.ws_event_queue, make_event(state, "sentiment", label=sentiment))
     except Exception:
         sentiment = "neutral"
