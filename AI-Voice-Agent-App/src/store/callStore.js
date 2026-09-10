@@ -39,7 +39,16 @@ const callStore = create((set) => ({
   setSelectedVoiceId: (selectedVoiceId) => set({ selectedVoiceId }),
   setMuted: (muted) => set({ muted }),
   setError: (error) => set({ error }),
-  setLatencies: (latencies) => set((prev) => ({ latencies: { ...prev.latencies, ...latencies } })),
+  // Accepts either a patch object or an updater function. Callers passed an
+  // updater, which silently did nothing: spreading a function yields no own
+  // enumerable properties, so the update was dropped.
+  setLatencies: (latencies) =>
+    set((prev) => ({
+      latencies: {
+        ...prev.latencies,
+        ...(typeof latencies === 'function' ? latencies(prev.latencies) : latencies),
+      },
+    })),
   setUploadedDocuments: (uploadedDocuments) =>
     set((prev) => ({
       uploadedDocuments:
