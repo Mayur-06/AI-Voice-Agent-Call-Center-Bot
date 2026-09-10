@@ -17,6 +17,18 @@ def get_genai_client() -> genai.Client:
     return _client
 
 
+# Appended to every persona prompt. Personas describe *who* the agent is; this
+# describes the medium. Without it the agent replied with markdown-formatted
+# multi-paragraph answers - a measured 26 seconds of synthesised speech for two
+# simple questions - and the markdown leaked into the on-screen transcript.
+VOICE_STYLE = (
+    "\n\nYou are speaking on a live phone call. Reply in plain spoken language: "
+    "no markdown, no bullet points, no headings, no emoji, no asterisks. "
+    "Keep answers to one or two short sentences and stop; ask a follow-up "
+    "question instead of listing everything you could say."
+)
+
+
 def _build_context_prompt(system_prompt: str, context_chunks: list[tuple[str, str]]) -> str:
     context_lines = []
     for filename, chunk in context_chunks:
@@ -25,12 +37,32 @@ def _build_context_prompt(system_prompt: str, context_chunks: list[tuple[str, st
     context_str = "\n".join(context_lines)
     return (
         f"{system_prompt}\n\n"
-        "Relevant document context:\n"
+        "Reference material that may be relevant:\n"
         f"{context_str}\n\n"
-        "Use the above context to answer the user's question accurately. "
-        "Cite your sources naturally in spoken prose. "
-        "Do NOT use markdown footnotes like [1] or formatted brackets."
+        "If this material answers the caller's question, use it and stay "
+        "faithful to the exact figures, dates and times it gives - never round "
+        "or approximate them. If it does not cover what they asked, ignore it "
+        "and answer normally; say you do not have that detail rather than "
+        "inventing one, and never tell the caller what your documents do or do "
+        "not contain. Cite sources naturally in spoken prose; do NOT use "
+        "markdown footnotes like [1] or formatted brackets."
     )
+
+
+# A voice call has no natural end, so an unbounded history grew the prompt on
+# every turn - steadily raising both cost and time-to-first-token.
+MAX_HISTORY_TURNS = 20
+
+
+def _to_contents(messages: list[dict[str, str]]) -> list:
+    recent = messages[-MAX_HISTORY_TURNS:]
+    return [
+        types.Content(
+            role="user" if msg["role"] == "user" else "model",
+            parts=[types.Part(text=msg["content"])],
+        )
+        for msg in recent
+    ]
 
 
 async def get_persona_system_prompt(persona_id: str) -> str:
@@ -48,16 +80,17 @@ async def generate_response(messages: list[dict[str, str]], system_prompt: str, 
     final_system_prompt = system_prompt
     if context:
         final_system_prompt = _build_context_prompt(system_prompt, context)
+    final_system_prompt += VOICE_STYLE
 
-    contents = []
-    for msg in messages:
-        role = "user" if msg["role"] == "user" else "model"
-        contents.append(types.Content(role=role, parts=[types.Part(text=msg["content"])]))
+    contents = _to_contents(messages)
 
     response = await get_genai_client().aio.models.generate_content(
         model=settings.gemini_model,
         contents=contents,
-        config=types.GenerateContentConfig(system_instruction=final_system_prompt),
+        config=types.GenerateContentConfig(
+            system_instruction=final_system_prompt,
+            max_output_tokens=settings.max_response_tokens,
+        ),
     )
     return response.text or ""
 
@@ -66,16 +99,17 @@ async def generate_response_stream(messages: list[dict[str, str]], system_prompt
     final_system_prompt = system_prompt
     if context:
         final_system_prompt = _build_context_prompt(system_prompt, context)
+    final_system_prompt += VOICE_STYLE
 
-    contents = []
-    for msg in messages:
-        role = "user" if msg["role"] == "user" else "model"
-        contents.append(types.Content(role=role, parts=[types.Part(text=msg["content"])]))
+    contents = _to_contents(messages)
 
     stream = await get_genai_client().aio.models.generate_content_stream(
         model=settings.gemini_model,
         contents=contents,
-        config=types.GenerateContentConfig(system_instruction=final_system_prompt),
+        config=types.GenerateContentConfig(
+            system_instruction=final_system_prompt,
+            max_output_tokens=settings.max_response_tokens,
+        ),
     )
     async for chunk in stream:
         if chunk.text:

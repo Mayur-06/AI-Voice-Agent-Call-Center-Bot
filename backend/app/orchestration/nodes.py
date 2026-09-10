@@ -258,19 +258,11 @@ async def chunk_node(state: dict) -> dict:
     if not text:
         return {**state, "chunks": [], "status": "chunked"}
 
-    chunk_size = 500
-    overlap = 50
-    cleaned = re.sub(r"\s+", " ", text).strip()
-    chunks = []
-    start = 0
-    while start < len(cleaned):
-        end = start + chunk_size
-        chunk = cleaned[start:end]
-        if chunk.strip():
-            chunks.append(chunk.strip())
-        start = end - overlap
+    # Shares the upload path's splitter instead of repeating (and drifting
+    # from) the same chunking rules in two places.
+    from app.services.rag import split_text
 
-    return {**state, "chunks": chunks, "status": "chunked"}
+    return {**state, "chunks": split_text(text), "status": "chunked"}
 
 
 async def embed_node(state: dict) -> dict:

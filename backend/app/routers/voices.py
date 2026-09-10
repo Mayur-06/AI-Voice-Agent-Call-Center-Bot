@@ -55,7 +55,7 @@ async def _ensure_voices():
 async def get_voices():
     await _ensure_voices()
     supabase = get_supabase()
-    res = supabase.table("voices").select("*").order("id").execute()
+    res = await run_supabase(lambda: supabase.table("voices").select("*").order("id").execute())
     return [Voice(**row) for row in (res.data or [])]
 
 
@@ -67,4 +67,6 @@ async def preview_voice(voice_id: str):
 
     preview_text = _VOICE_PREVIEW_TEXTS.get(voice["voice_id"], "Hello! I am your voice assistant.")
     audio_bytes = await synthesize_speech(preview_text, voice["voice_id"])
-    return Response(content=audio_bytes, media_type="audio/mpeg")
+    # synthesize_speech() returns WAV, not MP3; the old audio/mpeg label made
+    # strict clients refuse to play the preview.
+    return Response(content=audio_bytes, media_type="audio/wav")

@@ -16,7 +16,10 @@ class Settings(BaseSettings):
 
     groq_api_key: str = ""
     google_api_key: str = ""
-    gemini_model: str = "gemini-3.6-flash"
+    # gemini-3.6-flash is a thinking model: measured 8.6-13.2s before its
+    # first streamed token, which dominated every turn. flash-lite reaches
+    # first token in ~0.9s, which is what a phone call needs.
+    gemini_model: str = "gemini-3.1-flash-lite"
     hf_token: str = ""
     hf_hub_disable_symlinks_warning: bool = False
     embedding_device: str = "cpu"
@@ -42,8 +45,19 @@ class Settings(BaseSettings):
 
     pinecone_api_key: str = ""
     pinecone_index_name: str = "voice-agent-documents"
+    # Cosine floor for a retrieved chunk to be worth injecting. Without one,
+    # top_k always returned something, so an off-topic question pulled in
+    # unrelated documents and the agent answered from them. Measured on the
+    # live index with MiniLM: genuinely on-topic questions score 0.24-0.40,
+    # clearly unrelated ones 0.10 and below. The floor is deliberately loose -
+    # borderline chunks are cheap, and the prompt tells the model to ignore
+    # context that does not answer the question.
+    rag_min_score: float = 0.20
 
     filler_threshold_ms: int = 1500
+
+    # Spoken replies are capped so the agent does not monologue for 25s.
+    max_response_tokens: int = 300
 
 
 settings = Settings()

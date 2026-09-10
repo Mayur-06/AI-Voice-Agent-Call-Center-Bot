@@ -263,7 +263,9 @@ async def _persist_user_turn(state: SessionPipelineState, msg: TextInMessage) ->
             state.db_session_id,
             "user",
             msg.text,
-            latency_ms=0,
+            # None, not 0: a user turn has no response latency, and a stored 0
+            # was being averaged in as if it were a real measurement.
+            latency_ms=None,
             stt_latency_ms=msg.stt_latency_ms,
             recording_start_ms=msg.recording_start_ms,
             recording_end_ms=msg.recording_end_ms,
@@ -411,7 +413,9 @@ async def _run_llm_turn(
     state.conversation_mgr.append_assistant(full_response)
     safe_put_nowait(
         state.ws_event_queue,
-        make_event(state, "transcript_final", role="assistant", text=full_response),
+        # The UI renders this as plain text, so send what was actually spoken
+        # rather than the raw model output with its markdown still in it.
+        make_event(state, "transcript_final", role="assistant", text=strip_markdown(full_response)),
     )
 
 
@@ -445,6 +449,15 @@ async def tts_task(state: SessionPipelineState, audio_executor) -> None:
 
 
 async def _finish_turn(state: SessionPipelineState, msg: TurnComplete) -> None:
+    # is_speaking stays true until the queued audio has actually been handed to
+    # the socket. Clearing it here made the supervisor ignore barge-in for the
+    # whole tail of the reply, so the user could not interrupt the last
+    # sentences the agent was still speaking.
+    drain_deadline = time.perf_counter() + 30
+    while not state.audio_out_queue.empty():
+        await asyncio.sleep(0.02)
+        if state.current_turn_id != msg.turn_id or time.perf_counter() > drain_deadline:
+            break
     state.is_speaking = False
     ai_recording_end_ms = (
         int((time.perf_counter() - state.call_start_time) * 1000)
@@ -608,6 +621,13 @@ async def _cancel_current_turn(state: SessionPipelineState) -> None:
                 queue.get_nowait()
             except asyncio.QueueEmpty:
                 break
+
+    # Close the segment so the interrupted reply still appears in the saved
+    # call recording instead of being discarded with the buffer.
+    if state.call_start_time is not None:
+        manager.finish_ai_segment(
+            state.session_id, int((time.perf_counter() - state.call_start_time) * 1000)
+        )
 
     state.is_speaking = False
     safe_put_nowait(state.ws_event_queue, make_event(state, "turn_ended", reason="interrupted"))

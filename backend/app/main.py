@@ -9,6 +9,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.routers import personas, sessions, documents, voices, analytics
+from app.routers.personas import _ensure_personas
+from app.routers.voices import _ensure_voices
 from app.routers import transcripts, recordings, sentiment as sentiment_router, metrics, exports
 from app.websocket.handler import router as ws_router
 from app.services.rag import check_pinecone_health, warm_up as warm_up_embeddings
@@ -16,7 +18,8 @@ from app.services.stt import close_client as close_stt_client
 from app.services.storage import ensure_recordings_bucket, ensure_documents_bucket
 
 # Ensure log directory exists
-log_dir = os.path.join(os.path.dirname(__file__), "..", "log")
+# Same tree the per-session call logs use; "../log" was a second, stray one.
+log_dir = os.path.join(os.path.dirname(__file__), "..", "logs")
 os.makedirs(log_dir, exist_ok=True)
 
 # Logging is routed through a queue so that writing to disk never blocks the
@@ -47,6 +50,15 @@ async def lifespan(app: FastAPI):
     check_pinecone_health()
     ensure_documents_bucket()
     ensure_recordings_bucket()
+    # Seed reference data here rather than lazily inside GET /api/personas and
+    # GET /api/voices. The UI never calls those endpoints - it ships its own
+    # persona list and resolves by name - so against a fresh database the very
+    # first "start call" failed with "No personas available".
+    for seed, label in ((_ensure_personas, "personas"), (_ensure_voices, "voices")):
+        try:
+            await seed()
+        except Exception:
+            logger.exception("Failed to seed %s", label)
     app.state.audio_executor = ThreadPoolExecutor(
         max_workers=settings.ws_audio_executor_workers,
         thread_name_prefix="audio",

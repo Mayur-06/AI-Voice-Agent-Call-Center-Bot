@@ -23,7 +23,6 @@ logger = logging.getLogger(__name__)
 # sentence boundary, which dominates how sluggish the agent sounds.
 _SILENCE_LEVEL = 300           # int16 amplitude treated as silence
 _ONSET_PAD_MS = 30             # keep a little before speech starts
-_TAIL_HOLD_MS = 1200           # buffer enough to trim the trailing pad
 _GAP_KEEP_MS = 90              # natural pause left at the end of a sentence
 
 
@@ -42,17 +41,22 @@ def _last_voiced_index(pcm: bytes) -> int | None:
 async def _trim_silence(pcm_chunks, sample_rate: int):
     """Strip the leading and trailing silence Edge TTS adds to each utterance.
 
-    Leading silence is dropped as it arrives. Trailing silence needs the end of
-    the stream to identify, so a rolling tail is held back and trimmed once
-    synthesis finishes.
+    Leading silence is dropped as it arrives. Trailing silence is identified
+    without holding back a fixed window of audio: a chunk that contains any
+    voiced sample is forwarded immediately, and runs of wholly silent chunks
+    are buffered instead. A buffered run followed by more speech is an internal
+    pause and gets replayed; a run left over at end-of-stream is the trailing
+    pad and is dropped down to a short natural gap.
+
+    The previous version held back a fixed 1200ms tail so it could locate the
+    end, which added that delay to time-to-first-audio on every sentence.
     """
     bps = sample_rate * 2
     onset_pad = int(_ONSET_PAD_MS / 1000 * bps) & ~1
-    hold = int(_TAIL_HOLD_MS / 1000 * bps) & ~1
     keep = int(_GAP_KEEP_MS / 1000 * bps) & ~1
 
     started = False
-    tail = bytearray()
+    silence_run = bytearray()
     async for chunk in pcm_chunks:
         if not started:
             idx = _first_voiced_index(chunk)
@@ -61,22 +65,25 @@ async def _trim_silence(pcm_chunks, sample_rate: int):
             start = max(0, idx * 2 - onset_pad)
             chunk = chunk[start:]
             started = True
-        tail.extend(chunk)
-        if len(tail) > hold:
-            emit = bytes(tail[: len(tail) - hold])
-            del tail[: len(tail) - hold]
-            if emit:
-                yield emit
+        last = _last_voiced_index(chunk)
+        if last is None:
+            silence_run.extend(chunk)
+            continue
+        if silence_run:
+            # An internal pause between words: preserve it verbatim.
+            yield bytes(silence_run)
+            silence_run.clear()
+        # Split the chunk at its last voiced sample. The voiced part goes out
+        # immediately; the silence after it joins the run, so it is replayed if
+        # more speech follows and trimmed if this was the end of the utterance.
+        cut = min(len(chunk), last * 2 + 2)
+        silence_run.extend(chunk[cut:])
+        yield chunk[:cut]
 
-    if not started:
-        return
-    last = _last_voiced_index(bytes(tail))
-    if last is None:
-        remainder = bytes(tail[:keep])
-    else:
-        remainder = bytes(tail[: min(len(tail), last * 2 + 2 + keep)])
-    if remainder:
-        yield remainder
+    if started and silence_run:
+        remainder = bytes(silence_run[:keep])
+        if remainder:
+            yield remainder
 
 _MARKDOWN_PATTERN = re.compile(
     r"(\*\*|__)(.*?)\1|"          # bold

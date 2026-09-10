@@ -5,6 +5,7 @@ import uuid
 from collections import defaultdict
 from datetime import datetime, timezone
 from fastapi import APIRouter, WebSocket
+from starlette.websockets import WebSocketState
 from app.websocket.manager import manager, _append_log
 from app.services.vad import VADBuffer
 from app.services.audio_processor import compose_call_recording, save_session_recording
@@ -20,8 +21,16 @@ from app.orchestration.pipeline import SessionPipelineState, FiveQueuePipeline, 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-_session_handler_tasks: dict[str, asyncio.Task] = {}
+# The live socket is tracked alongside its handler so a reconnect can tell a
+# genuine second client apart from a handler that is merely finishing teardown.
+_session_handler_tasks: dict[str, tuple[asyncio.Task, WebSocket]] = {}
 _session_handler_locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
+
+# Ending a call writes the recording and generates a summary, which takes
+# several seconds. A client reconnecting after a dropped socket must wait for
+# that to finish rather than be turned away - its own retry backoff (1s, 2s,
+# 4s) falls entirely inside that window, so rejecting it killed the call.
+_TEARDOWN_WAIT_SECONDS = 45
 
 
 async def _log_stage(session_id: str, stage: str, level: str = "info", **extra) -> None:
@@ -45,32 +54,48 @@ async def _load_session(session_id: str) -> dict | None:
 @router.websocket("/ws/voice/{session_id}")
 async def websocket_voice(websocket: WebSocket, session_id: str):
     async with _session_handler_locks[session_id]:
-        existing_task = _session_handler_tasks.get(session_id)
-        if existing_task is not None and existing_task.done():
+        existing = _session_handler_tasks.get(session_id)
+        if existing is not None and existing[0].done():
             del _session_handler_tasks[session_id]
-            existing_task = None
+            existing = None
 
-        if existing_task is not None and not existing_task.done():
+        if existing is not None:
+            existing_task, existing_ws = existing
+            if existing_ws.client_state == WebSocketState.CONNECTED:
+                # A second client really is on this session; turn it away.
+                try:
+                    await websocket.accept()
+                    await websocket.send_json({"type": "info", "message": "session_already_active"})
+                    await websocket.close()
+                except Exception:
+                    pass
+                return
+
+            # The old socket is gone, so this is a reconnect and the previous
+            # handler is only completing its teardown. Let it finish, then
+            # carry on with the new socket.
+            await _log_stage(session_id, "AWAITING_PREVIOUS_TEARDOWN")
             try:
-                await websocket.accept()
-                await websocket.send_json({"type": "info", "message": "session_already_active"})
-                await websocket.close()
+                await asyncio.wait_for(asyncio.shield(existing_task), timeout=_TEARDOWN_WAIT_SECONDS)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                logger.warning("TEARDOWN_WAIT_EXPIRED session=%s", session_id)
             except Exception:
-                pass
-            return
+                logger.exception("TEARDOWN_FAILED session=%s", session_id)
+            _session_handler_tasks.pop(session_id, None)
 
         await manager.connect(session_id, websocket)
         await _log_stage(session_id, "CONNECTION_ESTABLISHED")
 
         handler_task = asyncio.create_task(_handle_voice_pipeline_v2(websocket, session_id))
-        _session_handler_tasks[session_id] = handler_task
+        _session_handler_tasks[session_id] = (handler_task, websocket)
 
     try:
         await handler_task
     except asyncio.CancelledError:
         pass
     finally:
-        if _session_handler_tasks.get(session_id) is handler_task:
+        tracked = _session_handler_tasks.get(session_id)
+        if tracked is not None and tracked[0] is handler_task:
             del _session_handler_tasks[session_id]
         lock = _session_handler_locks.get(session_id)
         if lock is not None and not lock.locked():
@@ -79,10 +104,19 @@ async def websocket_voice(websocket: WebSocket, session_id: str):
 
 async def _handle_voice_pipeline_v2(websocket: WebSocket, session_id: str) -> None:
     try:
-        persona_id = await _get_default_persona_id()
-        anonymous_user_id = str(uuid.uuid4())
-        db_session_id = await create_session(persona_id=persona_id, user_id=anonymous_user_id, session_id=session_id)
-        existing_session = await _load_session(db_session_id)
+        # The persona must come from the session the caller actually created:
+        # deriving it from _get_default_persona_id() gave every call the first
+        # persona in the table, so the selected persona's system prompt was
+        # never used and RAG filtered on the wrong persona_id.
+        existing_session = await _load_session(session_id)
+        if existing_session:
+            db_session_id = str(existing_session["id"])
+            persona_id = str(existing_session.get("persona_id") or "") or await _get_default_persona_id()
+        else:
+            persona_id = await _get_default_persona_id()
+            anonymous_user_id = str(uuid.uuid4())
+            db_session_id = await create_session(persona_id=persona_id, user_id=anonymous_user_id, session_id=session_id)
+            existing_session = await _load_session(db_session_id)
         voice_id = existing_session.get("selected_voice") if existing_session else None
         if not voice_id:
             try:
@@ -108,9 +142,15 @@ async def _handle_voice_pipeline_v2(websocket: WebSocket, session_id: str) -> No
         system_prompt = "You are a helpful voice assistant."
 
     conversation_mgr = ConversationManager()
+    # Reconnects resume an existing session, so turn numbering has to continue
+    # from what is already stored. Restarting at 0 gave the new turns sequence
+    # numbers that collided with the old ones, and every ordered read of the
+    # transcript came back interleaved.
+    resume_sequence = 0
     if existing_session:
         try:
             await conversation_mgr.load_from_db(db_session_id)
+            resume_sequence = len(conversation_mgr)
         except Exception:
             pass
 
@@ -133,6 +173,7 @@ async def _handle_voice_pipeline_v2(websocket: WebSocket, session_id: str) -> No
         vad=vad,
         speech_detected=asyncio.Event(),
         cancelled_turns=set(),
+        next_sequence_number=resume_sequence,
     )
 
     pipeline = FiveQueuePipeline(
@@ -162,8 +203,11 @@ async def _handle_voice_pipeline_v2(websocket: WebSocket, session_id: str) -> No
             elif event.get("type") == "force_stt":
                 logger.info("FORCE_STT_RECEIVED session=%s", state.session_id)
                 await pipeline.handle_barge_in(state)
+                # Must run on the same single-threaded executor as
+                # process_bytes: flushing from the audio pool raced the VAD
+                # loop and could corrupt the buffer mid-utterance.
                 audio_data = await asyncio.get_running_loop().run_in_executor(
-                    pipeline.audio_executor, state.vad.flush
+                    pipeline.vad_executor, state.vad.flush
                 )
                 if not audio_data:
                     safe_put_nowait(state.ws_event_queue, make_event(state, "status", message="idle"))
@@ -194,11 +238,13 @@ async def _handle_voice_pipeline_v2(websocket: WebSocket, session_id: str) -> No
                 ))
     finally:
         await pipeline.stop_pipeline(state)
-        recording_url = None
-        try:
-            user_pcm = bytes(state.user_pcm_buffer)
-            ai_segments = manager.get_ai_segments(session_id)
-            if user_pcm or ai_segments:
+
+        async def _build_recording() -> str | None:
+            try:
+                user_pcm = bytes(state.user_pcm_buffer)
+                ai_segments = manager.get_ai_segments(session_id)
+                if not (user_pcm or ai_segments):
+                    return None
                 composed = await asyncio.get_running_loop().run_in_executor(
                     pipeline.audio_executor,
                     compose_call_recording,
@@ -207,18 +253,30 @@ async def _handle_voice_pipeline_v2(websocket: WebSocket, session_id: str) -> No
                     settings.audio_sample_rate,
                 )
                 if composed:
-                    recording_url = await save_session_recording(db_session_id, composed)
-        except Exception:
-            pass
+                    return await save_session_recording(db_session_id, composed)
+            except Exception:
+                logger.exception("SAVE_RECORDING_FAILED session=%s", session_id)
+            return None
 
-        summary = ""
-        if len(conversation_mgr) > 0:
+        async def _build_summary() -> str:
+            if len(conversation_mgr) == 0:
+                return ""
             try:
-                summary = await asyncio.wait_for(generate_call_summary(conversation_mgr.get_history()), timeout=30)
+                return await asyncio.wait_for(
+                    generate_call_summary(conversation_mgr.get_history()), timeout=30
+                )
             except asyncio.TimeoutError:
                 logger.warning("SUMMARY_TIMEOUT session=%s", session_id)
             except Exception:
-                pass
+                logger.exception("SUMMARY_FAILED session=%s", session_id)
+            return ""
+
+        # Independent work, so it runs concurrently. Run one after the other,
+        # every teardown cost the sum of both - and a client reconnecting after
+        # a dropped socket waits out that whole window before it can rejoin.
+        recording_url, summary = await asyncio.gather(
+            _build_recording(), _build_summary()
+        )
 
         await end_session(db_session_id, recording_url=recording_url, summary=summary or None)
         current_ws = manager.active_connections.get(session_id)

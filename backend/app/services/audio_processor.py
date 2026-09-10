@@ -244,7 +244,14 @@ def compose_call_recording(user_pcm: bytes, ai_segments: list[dict], sample_rate
 
 async def save_session_recording(session_id: str, audio_buffer: bytes):
     try:
-        wav_bytes = pcm_to_wav(audio_buffer)
+        # compose_call_recording() already returns a complete WAV. Wrapping it
+        # again embedded a second 44-byte RIFF header inside the audio data,
+        # producing an audible click at the start of every saved call and a
+        # file whose declared sizes did not match its contents.
+        if audio_buffer[:4] == b"RIFF" and audio_buffer[8:12] == b"WAVE":
+            wav_bytes = audio_buffer
+        else:
+            wav_bytes = pcm_to_wav(audio_buffer)
     except Exception as exc:
         raise RuntimeError(f"Failed to encode session recording to WAV: {exc}") from exc
 

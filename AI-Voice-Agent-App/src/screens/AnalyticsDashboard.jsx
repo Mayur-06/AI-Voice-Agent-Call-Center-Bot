@@ -18,7 +18,7 @@ export default function AnalyticsDashboard() {
       setLoading(true);
       setError(null);
       try {
-        const res = await apiFetch(`${API_BASE}/api/analytics/`);
+        const res = await apiFetch(`${API_BASE}/api/analytics`);
         if (!res.ok) throw new Error('Failed to load analytics');
         const data = await res.json();
         if (!cancelled) setAnalytics(data);

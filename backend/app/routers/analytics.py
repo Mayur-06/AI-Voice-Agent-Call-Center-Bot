@@ -1,26 +1,35 @@
 from fastapi import APIRouter
 from datetime import datetime, timezone, timedelta
-from app.models.database import get_supabase
+from app.models.database import get_supabase, run_supabase
 
 router = APIRouter(prefix="/api/analytics", tags=["analytics"])
 
 
+# Registered on both spellings: a bare 307 from redirect_slashes loses the
+# request behind a proxy that rewrites Host, and costs a round trip.
 @router.get("")
+@router.get("/", include_in_schema=False)
 async def get_analytics():
     supabase = get_supabase()
     now = datetime.now(timezone.utc)
 
-    sessions = supabase.table("sessions").select("*").execute().data or []
-    messages = supabase.table("messages").select("latency_ms, sentiment, interrupted, speaker, timestamp, session_id").execute().data or []
-    call_metrics = supabase.table("call_metrics").select("*").execute().data or []
-    sentiment_records = supabase.table("sentiment_records").select("*").execute().data or []
-    personas = supabase.table("personas").select("id, name").execute().data or []
+    sessions = (await run_supabase(lambda: supabase.table("sessions").select("*").execute())).data or []
+    messages = (await run_supabase(lambda: supabase.table("messages").select("latency_ms, sentiment, interrupted, speaker, timestamp, session_id").execute())).data or []
+    call_metrics = (await run_supabase(lambda: supabase.table("call_metrics").select("*").execute())).data or []
+    sentiment_records = (await run_supabase(lambda: supabase.table("sentiment_records").select("*").execute())).data or []
+    personas = (await run_supabase(lambda: supabase.table("personas").select("id, name").execute())).data or []
 
     persona_map = {str(p["id"]): p.get("name", "Unknown") for p in personas}
 
     total_sessions = len(sessions)
     total_messages = len(messages)
-    latencies = [m["latency_ms"] for m in messages if m.get("latency_ms") is not None]
+    # Assistant turns only: user turns carry no response latency and were
+    # stored as 0, which halved the reported average.
+    latencies = [
+        m["latency_ms"]
+        for m in messages
+        if m.get("speaker") == "assistant" and m.get("latency_ms")
+    ]
     avg_latency = sum(latencies) / len(latencies) if latencies else 0
     sentiments = [m["sentiment"] for m in messages if m.get("sentiment")]
     sentiment_breakdown = {s: sentiments.count(s) for s in set(sentiments) if s}
@@ -72,7 +81,7 @@ async def get_analytics():
                 pid = str(s.get("persona_id", ""))
                 break
         name = persona_map.get(pid, "Unknown")
-        if name in per_persona and m.get("latency_ms") is not None:
+        if name in per_persona and m.get("speaker") == "assistant" and m.get("latency_ms"):
             per_persona[name]["total_latency"] += m["latency_ms"]
             per_persona[name]["latency_count"] += 1
 

@@ -152,7 +152,7 @@ export function useVoiceCall() {
         setFiller(null);
         break;
       default:
-        if ((message.startsWith('upload_received') || message.startsWith('decoded') || message.startsWith('vading')) && capturingRef.current) {
+        if (typeof message === 'string' && (message.startsWith('upload_received') || message.startsWith('decoded') || message.startsWith('vading')) && capturingRef.current) {
           const currentStatus = useCallStore.getState().status;
           if (currentStatus !== 'processing' && currentStatus !== 'speaking') {
             setStatus('listening');
@@ -637,13 +637,10 @@ export function useVoiceCall() {
   }, [sessionId, mediaStream, setMediaStream, stopTtsPlayback, setStatus]);
 
   const toggleCapture = useCallback(async () => {
-    console.info('[voice] toggleCapture invoked; capturing=', capturingRef.current, 'muted=', mutedRef.current);
     if (capturingRef.current) {
-      console.info('[voice] toggleCapture -> stopCapture');
       stopCapture();
       return;
     }
-    console.info('[voice] toggleCapture -> startMicCapture');
     const ok = await startMicCapture();
     if (!ok) {
       setError('Microphone access failed');

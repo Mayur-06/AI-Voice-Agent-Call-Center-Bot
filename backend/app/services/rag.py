@@ -75,17 +75,44 @@ def check_pinecone_health():
 
 
 def split_text(text: str) -> list[str]:
+    """Split text into overlapping chunks, breaking on word boundaries.
+
+    The previous version sliced at exact character offsets, so a chunk could
+    both end and begin mid-word ("...specialist immed" / "e agent must..."),
+    which corrupts the embedding of every boundary chunk and puts broken
+    fragments in front of the model as retrieved context.
+    """
     cleaned = re.sub(r"\s+", " ", text).strip()
+    if not cleaned:
+        return []
     if len(cleaned) <= _chunk_size:
         return [cleaned]
+
     chunks = []
     start = 0
     while start < len(cleaned):
         end = start + _chunk_size
-        chunk = cleaned[start:end]
-        chunks.append(chunk)
-        start = end - _chunk_overlap
-    return [chunk for chunk in chunks if chunk.strip()]
+        if end >= len(cleaned):
+            chunk = cleaned[start:]
+            if chunk.strip():
+                chunks.append(chunk.strip())
+            break
+        # Retreat to the last space so the chunk ends on a whole word.
+        split_at = cleaned.rfind(" ", start, end)
+        if split_at <= start:
+            split_at = end  # single word longer than a chunk: hard cut
+        chunk = cleaned[start:split_at]
+        if chunk.strip():
+            chunks.append(chunk.strip())
+        # Advance, then step back over whole words to build the overlap.
+        next_start = split_at - _chunk_overlap
+        if next_start > start:
+            boundary = cleaned.find(" ", next_start)
+            next_start = boundary + 1 if 0 <= boundary < split_at else split_at
+        else:
+            next_start = split_at
+        start = next_start
+    return chunks
 
 
 def generate_embeddings(texts: list[str]) -> list[list[float]]:
@@ -141,10 +168,18 @@ async def _query_pinecone(query_embedding: list[float], top_k: int, filter_dict:
     results = await _run(_do_query)
     chunks = []
     for match in results.matches:
+        if getattr(match, "score", 0.0) < settings.rag_min_score:
+            continue
         text = match.metadata.get("text", "")
         filename = match.metadata.get("filename", "")
         if text:
             chunks.append((filename, text))
+    if not chunks and results.matches:
+        logger.info(
+            "RAG_BELOW_THRESHOLD best_score=%.3f min=%.2f",
+            max(getattr(m, "score", 0.0) for m in results.matches),
+            settings.rag_min_score,
+        )
     return chunks
 
 
