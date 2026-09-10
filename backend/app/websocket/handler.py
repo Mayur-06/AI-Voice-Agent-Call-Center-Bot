@@ -1,240 +1,232 @@
 import json
 import logging
 import asyncio
+import time
+import uuid
+from collections import defaultdict
+from contextlib import suppress
 from datetime import datetime, timezone
-from collections import deque
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
-from app.websocket.manager import manager
+from fastapi import APIRouter, WebSocket
+from app.websocket.manager import manager, _append_log
 from app.services.vad import VADBuffer
-from app.services.audio import convert_to_wav, decode_to_pcm, pcm_to_wav
-from app.services.stt import transcribe_audio
-from app.services.llm import generate_response
-from app.services.tts import synthesize_speech
-from app.services.rag import retrieve_context
-from app.services.session import save_turn, end_session, create_session
+from app.services.audio_processor import pcm_to_wav, compose_call_recording, save_session_recording
+from app.services.stt import transcribe_audio, is_noisy_transcription
+from app.services.conversation_mgr import ConversationManager
+from app.services.call_summarizer import generate_call_summary
+from app.services.session import create_session, end_session, _get_default_persona_id
+from app.services.tts import get_persona_voice_id
+from app.models.database import get_supabase, run_supabase
 from app.config import settings
-from app.models.database import get_supabase
+from app.orchestration.pipeline import SessionPipelineState, FiveQueuePipeline, safe_put_nowait, make_event, TextInMessage
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-SESSION_LOG_MAX = 200
-session_logs: dict[str, deque[dict]] = {}
-session_log_events: dict[str, list[asyncio.Event]] = {}
+_session_handler_tasks: dict[str, asyncio.Task] = {}
+_session_handler_locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
 
-async def _append_log(session_id: str, entry: dict) -> None:
-    logs = session_logs.setdefault(session_id, deque(maxlen=SESSION_LOG_MAX))
-    logs.append(entry)
-    for ev in list(session_log_events.get(session_id, [])):
-        ev.set()
+async def _log_stage(session_id: str, stage: str, level: str = "info", **extra) -> None:
+    msg_parts = [f"STAGE: {stage}"]
+    if extra:
+        msg_parts.append(" ".join(f"{k}={v}" for k, v in extra.items()))
+    await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": level, "msg": " ".join(msg_parts)})
 
 
-async def _stream_session_logs(session_id: str):
-    ev = asyncio.Event()
-    session_log_events.setdefault(session_id, []).append(ev)
+async def _load_session(session_id: str) -> dict | None:
+    client = get_supabase()
     try:
-        for entry in list(session_logs.get(session_id, [])):
-            yield f"data: {json.dumps(entry)}\n\n"
-        while True:
-            await ev.wait()
-            ev.clear()
-            while session_logs.get(session_id):
-                entry = session_logs[session_id].popleft()
-                yield f"data: {json.dumps(entry)}\n\n"
-    finally:
-        session_log_events.get(session_id, []).remove(ev)
+        res = await run_supabase(lambda: client.table("sessions").select("*").eq("id", session_id).limit(1).execute())
+        if res.data:
+            return res.data[0]
+    except Exception:
+        pass
+    return None
 
 
 @router.websocket("/ws/voice/{session_id}")
-async def websocket_voice(websocket: WebSocket, session_id: str, token: str = Query(...)):
-    supabase = get_supabase()
-    try:
-        user = supabase.auth.get_user(token)
-        if not user or not user.user:
-            await websocket.close(code=4001, reason="Unauthorized")
+async def websocket_voice(websocket: WebSocket, session_id: str):
+    async with _session_handler_locks[session_id]:
+        existing_task = _session_handler_tasks.get(session_id)
+        if existing_task is not None and existing_task.done():
+            del _session_handler_tasks[session_id]
+            existing_task = None
+
+        if existing_task is not None and not existing_task.done():
+            try:
+                await websocket.accept()
+                await websocket.send_json({"type": "info", "message": "session_already_active"})
+                await websocket.close()
+            except Exception:
+                pass
             return
-    except Exception:
-        await websocket.close(code=4001, reason="Unauthorized")
+
+        await manager.connect(session_id, websocket)
+        await _log_stage(session_id, "CONNECTION_ESTABLISHED")
+
+        handler_task = asyncio.create_task(_handle_voice_pipeline_v2(websocket, session_id))
+        _session_handler_tasks[session_id] = handler_task
+
+    try:
+        await handler_task
+    except asyncio.CancelledError:
+        pass
+    finally:
+        if _session_handler_tasks.get(session_id) is handler_task:
+            del _session_handler_tasks[session_id]
+
+
+async def _handle_voice_pipeline_v2(websocket: WebSocket, session_id: str) -> None:
+    try:
+        persona_id = await _get_default_persona_id()
+        anonymous_user_id = str(uuid.uuid4())
+        db_session_id = await create_session(persona_id=persona_id, user_id=anonymous_user_id, session_id=session_id)
+        existing_session = await _load_session(db_session_id)
+        voice_id = existing_session.get("selected_voice") if existing_session else None
+        if not voice_id:
+            try:
+                voice_id = await get_persona_voice_id(persona_id)
+            except Exception:
+                voice_id = "en-IN-NeerjaNeural"
+    except Exception as exc:
+        await _log_stage(session_id, "SESSION_INIT_FAILED", level="error", error=str(exc))
+        try:
+            await manager.send_json(session_id, {"type": "error", "message": f"session_init_failed:{type(exc).__name__}"})
+        except Exception:
+            pass
+        manager.disconnect(session_id)
         return
 
-    await manager.connect(session_id, websocket)
-    await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "info", "msg": f"WS connected session={session_id}"})
+    await _log_stage(session_id, "SESSION_INITIALIZED", db_session=db_session_id, persona=persona_id)
+    manager.enable_recording(session_id)
+    await _log_stage(session_id, "RECORDING_ENABLED")
+
+    conversation_mgr = ConversationManager()
+    if existing_session:
+        try:
+            await conversation_mgr.load_from_db(db_session_id)
+        except Exception:
+            pass
 
     vad = VADBuffer(sample_rate=settings.audio_sample_rate)
-    conversation: list[dict[str, str]] = []
-    persona_id = "default"
-    voice_id = "en-IN-NeerjaNeural"
-    is_playing = False
-    filler_sent = False
-    db_session_id = None
+
+    state = SessionPipelineState(
+        session_id=session_id,
+        db_session_id=db_session_id,
+        persona_id=persona_id,
+        voice_id=voice_id,
+        websocket=websocket,
+        audio_in_queue=asyncio.Queue(maxsize=settings.ws_queue_max_size),
+        text_in_queue=asyncio.Queue(maxsize=settings.ws_queue_max_size),
+        sentence_queue=asyncio.Queue(maxsize=settings.ws_queue_max_size),
+        audio_out_queue=asyncio.Queue(maxsize=settings.ws_queue_max_size),
+        control_queue=asyncio.Queue(maxsize=settings.ws_queue_max_size),
+        ws_event_queue=asyncio.Queue(maxsize=settings.ws_queue_max_size),
+        conversation_mgr=conversation_mgr,
+        vad=vad,
+        speech_detected=asyncio.Event(),
+        cancelled_turns=set(),
+    )
+
+    pipeline = FiveQueuePipeline(
+        audio_executor=websocket.app.state.audio_executor,
+        vad_executor=websocket.app.state.vad_executor,
+        embedding_executor=websocket.app.state.embedding_executor,
+    )
+    pipeline.start_pipeline(state)
 
     try:
-        await manager.send_json(session_id, {"type": "status", "message": "connected"})
-        await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "info", "msg": f"WS status connected session={session_id}"})
-
         while True:
-            message = await websocket.receive()
-            await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "debug", "msg": f"WS receive session={session_id} message_keys={list(message.keys())}"})
-
-            if "bytes" in message:
-                chunk = message["bytes"]
-                await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "info", "msg": f"WS audio chunk session={session_id} bytes={len(chunk)} playing={is_playing}"})
-                await manager.send_json(session_id, {"type": "status", "message": "upload_received"})
-                if is_playing:
-                    is_playing = False
-                    await manager.send_json(session_id, {"type": "status", "message": "interrupted"})
-                    await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "info", "msg": f"WS playback interrupted session={session_id}"})
-
-                try:
-                    chunk = decode_to_pcm(chunk, sample_rate=settings.audio_sample_rate)
-                except Exception as exc:
-                    await manager.send_json(session_id, {"type": "error", "message": f"decode_failed:{str(exc)}"})
-                    await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "error", "msg": f"WS decode failed session={session_id} error={exc}"})
+            event = await state.control_queue.get()
+            if event is None:
+                break
+            if event.get("type") in ("disconnect", "stop_call"):
+                break
+            if event.get("type") == "start_call":
+                if state.call_start_time is None:
+                    state.call_start_time = time.perf_counter()
+                logger.info("HANDLER_START_CALL session=%s call_started=%s call_start_time=%s", state.session_id, state.call_started, state.call_start_time)
+            elif event.get("type") == "voice_select":
+                data = event["data"]
+                state.voice_id = data.get("voice_id") or state.voice_id
+                safe_put_nowait(state.ws_event_queue, make_event(state, "status", message=f"voice_selected:{state.voice_id}"))
+            elif event.get("type") == "cancel_turn":
+                await pipeline.handle_barge_in(state)
+            elif event.get("type") == "force_stt":
+                logger.info("FORCE_STT_RECEIVED session=%s call_started=%s", state.session_id, state.call_started)
+                await pipeline.handle_barge_in(state)
+                vad_instance = state.vad
+                audio_data = await asyncio.get_running_loop().run_in_executor(
+                    pipeline.audio_executor, vad_instance.flush
+                )
+                if not audio_data:
+                    safe_put_nowait(state.ws_event_queue, make_event(state, "status", message="idle"))
                     continue
+                wav_audio = await asyncio.get_running_loop().run_in_executor(
+                    pipeline.audio_executor, pcm_to_wav, audio_data, settings.audio_sample_rate
+                )
+                stt_start = time.perf_counter()
+                try:
+                    user_text = await asyncio.wait_for(transcribe_audio(wav_audio), timeout=15)
+                except asyncio.TimeoutError:
+                    safe_put_nowait(state.ws_event_queue, make_event(state, "error", message="stt_timeout"))
+                    safe_put_nowait(state.ws_event_queue, make_event(state, "status", message="idle"))
+                    continue
+                stt_latency_ms = int((time.perf_counter() - stt_start) * 1000)
+                logger.info("FORCE_STT_TRANSCRIPTION session=%s text=%r latency_ms=%s", state.session_id, user_text, stt_latency_ms)
+                if not user_text or is_noisy_transcription(user_text):
+                    safe_put_nowait(state.ws_event_queue, make_event(state, "error", message="empty_transcript"))
+                    safe_put_nowait(state.ws_event_queue, make_event(state, "status", message="idle"))
+                    continue
+                state.user_pcm_buffer.clear()
+                safe_put_nowait(
+                    state.ws_event_queue,
+                    make_event(state, "transcript_final", role="user", text=user_text, stt_latency_ms=stt_latency_ms),
+                )
+                safe_put_nowait(state.text_in_queue, TextInMessage(
+                    session_id=state.session_id,
+                    text=user_text,
+                    stt_latency_ms=stt_latency_ms,
+                ))
+            elif event.get("type") == "external_transcript":
+                data = event["data"]
+                safe_put_nowait(state.text_in_queue, TextInMessage(
+                    session_id=state.session_id,
+                    text=data.get("text", ""),
+                    stt_latency_ms=None,
+                ))
+    finally:
+        await pipeline.stop_pipeline(state)
+        recording_url = None
+        try:
+            user_pcm = bytes(state.user_pcm_buffer)
+            ai_segments = manager.get_ai_segments(session_id)
+            if user_pcm or ai_segments:
+                composed = await asyncio.get_running_loop().run_in_executor(
+                    pipeline.audio_executor,
+                    compose_call_recording,
+                    user_pcm,
+                    ai_segments,
+                    settings.audio_sample_rate,
+                )
+                if composed:
+                    recording_url = await save_session_recording(db_session_id, composed)
+        except Exception:
+            pass
 
-                await manager.send_json(session_id, {"type": "status", "message": "decoded"})
-                vad_frame_ms = 30
-                frame_size = int(settings.audio_sample_rate * 2 * (vad_frame_ms / 1000))
-                await manager.send_json(session_id, {"type": "status", "message": "vading"})
-                vad_frames = 0
-                speech_ended = False
-                audio_data = None
-                for i in range(0, len(chunk), frame_size):
-                    frame = bytes(chunk[i:i + frame_size])
-                    if len(frame) == frame_size:
-                        vad_frames += 1
-                        try:
-                            frame_audio, frame_speech_ended = vad.process(frame)
-                        except Exception as exc:
-                            await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "error", "msg": f"WS VAD error session={session_id} error={exc}"})
-                            continue
-                        if frame_audio:
-                            await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "debug", "msg": f"WS VAD session={session_id} speech_ended={frame_speech_ended} audio_len={len(frame_audio)}"})
-                        if frame_speech_ended and frame_audio:
-                            speech_ended = True
-                            audio_data = frame_audio
-                            break
-                        if vad_frames % 50 == 0:
-                            await manager.send_json(session_id, {"type": "status", "message": "vading"})
+        summary = ""
+        if len(conversation_mgr) > 0:
+            try:
+                summary = await asyncio.wait_for(generate_call_summary(conversation_mgr.get_history()), timeout=30)
+            except asyncio.TimeoutError:
+                logger.warning("SUMMARY_TIMEOUT session=%s", session_id)
+            except Exception:
+                pass
 
-                if not speech_ended:
-                    await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "warning", "msg": f"WS VAD no speech end detected session={session_id} vad_frames={vad_frames} chunk_len={len(chunk)}"})
-                    if len(chunk) >= frame_size:
-                        audio_data = chunk
-                        speech_ended = True
-
-                if speech_ended and audio_data:
-                    await manager.send_json(session_id, {"type": "status", "message": "processing"})
-                    await manager.send_json(session_id, {"type": "status", "message": "transcribing"})
-                    await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "info", "msg": f"WS speech ended session={session_id} audio_len={len(audio_data)}"})
-                    wav_audio = pcm_to_wav(audio_data, sample_rate=settings.audio_sample_rate)
-                    try:
-                        user_text = await asyncio.wait_for(transcribe_audio(wav_audio), timeout=15)
-                    except asyncio.TimeoutError:
-                        await manager.send_json(session_id, {"type": "error", "message": "stt_timeout"})
-                        await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "error", "msg": f"WS STT timeout session={session_id}"})
-                        continue
-                    await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "info", "msg": f"WS STT session={session_id} text={user_text}"})
-                    await manager.send_json(session_id, {"type": "status", "message": "transcribed"})
-                    if not user_text:
-                        await manager.send_json(session_id, {"type": "error", "message": "empty_transcript"})
-                        await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "warning", "msg": f"WS empty transcript session={session_id}"})
-                        continue
-
-                    conversation.append({"role": "user", "content": user_text})
-                    target_session = db_session_id or session_id
-                    await save_turn(target_session, "user", user_text)
-
-                    await manager.send_json(session_id, {"type": "status", "message": "retrieving_context"})
-                    try:
-                        context = await asyncio.wait_for(retrieve_context(user_text), timeout=10)
-                    except asyncio.TimeoutError:
-                        context = []
-                        await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "warning", "msg": f"WS RAG timeout session={session_id}"})
-                    await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "info", "msg": f"WS RAG context session={session_id} chunks={len(context) if context else 0}"})
-                    await manager.send_json(session_id, {"type": "status", "message": "thinking"})
-                    try:
-                        response_text = await asyncio.wait_for(generate_response(conversation, "You are a helpful voice assistant."), timeout=30)
-                    except asyncio.TimeoutError:
-                        response_text = "I'm sorry, I'm taking too long to respond. Please try again."
-                        await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "error", "msg": f"WS LLM timeout session={session_id}"})
-                    await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "info", "msg": f"WS LLM response session={session_id} text={response_text}"})
-                    conversation.append({"role": "assistant", "content": response_text})
-                    await save_turn(target_session, "assistant", response_text)
-
-                    await manager.send_json(session_id, {"type": "status", "message": "speaking"})
-                    try:
-                        audio_data = await asyncio.wait_for(synthesize_speech(response_text, voice_id), timeout=20)
-                    except asyncio.TimeoutError:
-                        await manager.send_json(session_id, {"type": "error", "message": "tts_timeout"})
-                        await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "error", "msg": f"WS TTS timeout session={session_id}"})
-                        continue
-                    await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "info", "msg": f"WS TTS session={session_id} audio_len={len(audio_data)}"})
-                    is_playing = True
-                    await manager.send_bytes(session_id, audio_data)
-                    await manager.send_json(session_id, {"type": "response_audio", "text": response_text})
-                    is_playing = False
-                    await manager.send_json(session_id, {"type": "status", "message": "response_ready"})
-                    await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "info", "msg": f"WS response sent session={session_id}"})
-
-            elif "text" in message:
-                data = json.loads(message["text"])
-                msg_type = data.get("type")
-                await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "info", "msg": f"WS text message session={session_id} type={msg_type}"})
-
-                if msg_type == "auth":
-                    persona_id = data.get("persona_id", persona_id)
-                    voice_id = data.get("voice_id", voice_id)
-                    user_id = data.get("user_id")
-                    db_session_id = await create_session(persona_id, user_id=user_id)
-                    await manager.send_json(session_id, {"type": "status", "message": "authenticated"})
-                    await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "info", "msg": f"WS authenticated session={session_id} persona={persona_id} voice={voice_id} db_session={db_session_id}"})
-
-                elif msg_type == "voice_select":
-                    voice_id = data.get("voice_id", voice_id)
-                    await manager.send_json(session_id, {"type": "status", "message": f"voice_selected:{voice_id}"})
-                    await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "info", "msg": f"WS voice selected session={session_id} voice={voice_id}"})
-
-                elif msg_type == "stop_playback":
-                    is_playing = False
-                    await manager.send_json(session_id, {"type": "status", "message": "playback_stopped"})
-                    await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "info", "msg": f"WS playback stopped session={session_id}"})
-
-                elif msg_type == "transcript":
-                    user_text = data.get("text", "")
-                    if not user_text:
-                        continue
-                    await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "info", "msg": f"WS transcript session={session_id} text={user_text}"})
-                    conversation.append({"role": "user", "content": user_text})
-                    target_session = db_session_id or session_id
-                    await save_turn(target_session, "user", user_text)
-
-                    context = await retrieve_context(user_text)
-                    await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "info", "msg": f"WS RAG context session={session_id} chunks={len(context) if context else 0}"})
-                    system_prompt = "You are a helpful voice assistant."
-                    response_text = await generate_response(conversation, system_prompt)
-                    await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "info", "msg": f"WS LLM response session={session_id} text={response_text}"})
-                    conversation.append({"role": "assistant", "content": response_text})
-                    await save_turn(target_session, "assistant", response_text)
-
-                    try:
-                        audio_data = await synthesize_speech(response_text, voice_id)
-                        await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "info", "msg": f"WS TTS session={session_id} audio_len={len(audio_data)}"})
-                        is_playing = True
-                        await manager.send_bytes(session_id, audio_data)
-                        await manager.send_json(session_id, {"type": "response_audio", "text": response_text})
-                        is_playing = False
-                        await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "info", "msg": f"WS response sent session={session_id}"})
-                    except Exception as exc:
-                        await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "error", "msg": f"WS TTS failed session={session_id} error={exc}"})
-                        await manager.send_json(session_id, {
-                            "type": "error",
-                            "message": f"tts_failed:{str(exc)}",
-                        })
-
-    except WebSocketDisconnect:
-        target_session = db_session_id or session_id
-        await end_session(target_session)
-        manager.disconnect(session_id)
-        await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "info", "msg": f"WS disconnected session={session_id} target_session={target_session}"})
+        await end_session(db_session_id, recording_url=recording_url, summary=summary or None)
+        current_ws = manager.active_connections.get(session_id)
+        if current_ws is None or current_ws is websocket:
+            manager.disconnect(session_id)
+        await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "info", "msg": f"WS disconnected session={session_id} target_session={db_session_id}"})
+        from app.services.call_session_logger import close_session
+        await close_session(session_id)

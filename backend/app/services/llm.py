@@ -1,23 +1,73 @@
-import httpx
+from typing import Optional
+
+from google import genai
+from google.genai import types
 from app.config import settings
+from app.models.database import get_supabase, run_supabase
+
+_client = genai.Client(api_key=settings.google_api_key)
 
 
-GEMINI_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{settings.gemini_model}:generateContent"
+def _build_context_prompt(system_prompt: str, context_chunks: list[tuple[str, str]]) -> str:
+    context_lines = []
+    for filename, chunk in context_chunks:
+        source = filename or "unknown document"
+        context_lines.append(f"[{source}] {chunk}")
+    context_str = "\n".join(context_lines)
+    return (
+        f"{system_prompt}\n\n"
+        "Relevant document context:\n"
+        f"{context_str}\n\n"
+        "Use the above context to answer the user's question accurately. "
+        "Cite your sources naturally in spoken prose. "
+        "Do NOT use markdown footnotes like [1] or formatted brackets."
+    )
 
 
-async def generate_response(messages: list[dict[str, str]], system_prompt: str) -> str:
+async def get_persona_system_prompt(persona_id: str) -> str:
+    client = get_supabase()
+    try:
+        res = await run_supabase(lambda: client.table("personas").select("system_prompt").eq("id", persona_id).limit(1).execute())
+        if res.data:
+            return res.data[0]["system_prompt"]
+    except Exception:
+        pass
+    return "You are a helpful voice assistant."
+
+
+async def generate_response(messages: list[dict[str, str]], system_prompt: str, context: Optional[list[tuple[str, str]]] = None) -> str:
+    final_system_prompt = system_prompt
+    if context:
+        final_system_prompt = _build_context_prompt(system_prompt, context)
+
     contents = []
     for msg in messages:
         role = "user" if msg["role"] == "user" else "model"
-        contents.append({"role": role, "parts": [{"text": msg["content"]}]})
+        contents.append(types.Content(role=role, parts=[types.Part(text=msg["content"])]))
 
-    payload = {
-        "system_instruction": {"parts": [{"text": system_prompt}]},
-        "contents": contents,
-    }
-    params = {"key": settings.google_api_key}
-    async with httpx.AsyncClient() as client:
-        response = await client.post(GEMINI_API_URL, params=params, json=payload, timeout=30.0)
-        response.raise_for_status()
-        result = response.json()
-        return result["candidates"][0]["content"]["parts"][0]["text"]
+    response = await _client.aio.models.generate_content(
+        model=settings.gemini_model,
+        contents=contents,
+        config=types.GenerateContentConfig(system_instruction=final_system_prompt),
+    )
+    return response.text or ""
+
+
+async def generate_response_stream(messages: list[dict[str, str]], system_prompt: str, context: Optional[list[tuple[str, str]]] = None):
+    final_system_prompt = system_prompt
+    if context:
+        final_system_prompt = _build_context_prompt(system_prompt, context)
+
+    contents = []
+    for msg in messages:
+        role = "user" if msg["role"] == "user" else "model"
+        contents.append(types.Content(role=role, parts=[types.Part(text=msg["content"])]))
+
+    stream = await _client.aio.models.generate_content_stream(
+        model=settings.gemini_model,
+        contents=contents,
+        config=types.GenerateContentConfig(system_instruction=final_system_prompt),
+    )
+    async for chunk in stream:
+        if chunk.text:
+            yield chunk.text

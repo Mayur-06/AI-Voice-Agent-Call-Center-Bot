@@ -1,0 +1,265 @@
+<!DOCTYPE html><html class="dark" lang="en" style=""><head>
+<meta charset="utf-8">
+<meta content="width=device-width, initial-scale=1.0" name="viewport">
+<title>Resonance — Prepare for Your Call</title>
+<link href="https://fonts.googleapis.com" rel="preconnect">
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect">
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;500;700&amp;family=Space+Grotesk:wght@400;500;700&amp;display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"><link href="https://fonts.googleapis.com/css2?family=Asap:ital,wght@0,300..900;1,300..900&amp;display=swap" rel="stylesheet" class=""><link href="https://fonts.googleapis.com/css2?family=Montserrat:ital,wght@0,300;0,400;0,500;0,600;0,700;0,800;1,400&amp;display=swap" rel="stylesheet" class="">
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<script id="tailwind-config">tailwind.config = {theme: {extend: {colors: {ink: "#03191e", pearl: "#ebe1c1", "pearl-light": "#f4eedd", canvas: "#fbfbff", "canvas-alt": "#f3f3f8", subtle: "#626c71", borderline: "#ded9cc", "surface-container-lowest": "#051014", "surface-tint": "#d0c6a7", primary: "#fffdff", "on-surface-variant": "#ccc6ba", "surface-container-high": "#202c30", "on-primary-fixed": "#201b08", "on-tertiary-fixed-variant": "#364a4e", "secondary-container": "#354a50", "on-secondary-fixed": "#081e24", "on-surface": "#d8e5ea", "on-error": "#690005", "on-tertiary-fixed": "#0a1e22", "on-tertiary": "#203338", "primary-fixed": "#ece2c2", "error-container": "#93000a", "surface-container-highest": "#2b373b", "on-background": "#d8e5ea", "on-primary": "#35301b", "inverse-on-surface": "#263237", "tertiary-container": "#cfe5ea", surface: "#091519", "surface-dim": "#091519", tertiary: "#fbfeff", "on-primary-container": "#6a644a", "inverse-primary": "#655e45", "surface-variant": "#2b373b", error: "#ffb4ab", "on-primary-fixed-variant": "#4d472f", "primary-fixed-dim": "#d0c6a7", "outline-variant": "#4a473d", "on-secondary": "#1e3439", background: "#091519", "tertiary-fixed-dim": "#b5cacf", "secondary-fixed": "#cfe6ed", "surface-bright": "#2f3b40", "inverse-surface": "#d8e5ea", "primary-container": "#ebe1c1", "on-secondary-fixed-variant": "#354a50", "tertiary-fixed": "#d0e6eb", "on-error-container": "#ffdad6", "surface-container": "#152126", "secondary-fixed-dim": "#b4cad1", secondary: "#b4cad1", "on-secondary-container": "#a2b9bf", "surface-container-low": "#111d21", "on-tertiary-container": "#53676b", outline: "#959085"}, fontFamily: {headline: ["Syne"], body: ["Space Grotesk"], display: ["Syne"], label: ["Space Grotesk"], "body-sm": ["Space Grotesk"], "headline-lg": ["Syne"], "label-md": ["Space Grotesk"], "body-lg": ["Space Grotesk"], "label-sm": ["Space Grotesk"], "headline-md": ["Syne"], "headline-sm": ["Syne"], "body-md": ["Space Grotesk"], "display-lg-mobile": ["Syne"], "display-lg": ["Syne"], "label-lg": ["Space Grotesk"]}, fontSize: {"body-sm": ["12px", {lineHeight: "18px", letterSpacing: "0.01em", fontWeight: "400"}], "headline-lg": ["32px", {lineHeight: "40px", letterSpacing: "-0.02em", fontWeight: "700"}], "label-md": ["11px", {lineHeight: "16px", letterSpacing: "0.08em", fontWeight: "700"}], "body-lg": ["16px", {lineHeight: "26px", letterSpacing: "-0.01em", fontWeight: "400"}], "label-sm": ["10px", {lineHeight: "14px", letterSpacing: "0.12em", fontWeight: "700"}], "headline-md": ["24px", {lineHeight: "32px", letterSpacing: "-0.01em", fontWeight: "700"}], "headline-sm": ["18px", {lineHeight: "26px", letterSpacing: "0em", fontWeight: "600"}], "body-md": ["14px", {lineHeight: "22px", letterSpacing: "0em", fontWeight: "400"}], "display-lg-mobile": ["38px", {lineHeight: "44px", letterSpacing: "-0.02em", fontWeight: "800"}], "display-lg": ["56px", {lineHeight: "64px", letterSpacing: "-0.03em", fontWeight: "800"}], "label-lg": ["14px", {lineHeight: "20px", letterSpacing: "0.04em", fontWeight: "600"}]}, borderRadius: {DEFAULT: "0.25rem", lg: "0.5rem", xl: "0.75rem", full: "9999px"}, spacing: {"space-3xl": "4rem", "space-2xs": "0.25rem", "gutter-md": "1.5rem", "space-lg": "1.5rem", "gutter-lg": "2rem", "space-xl": "2rem", "space-md": "1rem", "space-2xl": "3rem", "space-sm": "0.75rem", "space-xs": "0.5rem", "gutter-sm": "0.75rem", "grid-margin-mobile": "1rem", "grid-margin-desktop": "3rem"}}}};</script>
+<style>
+    .material-symbols-outlined {
+      font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+      display: inline-block;
+      vertical-align: middle;
+      line-height: 1;
+    }
+  </style>
+<style class="">:root { --ink-black: #03191e; } body { color: #03191e !important; } .text-subtle { color: #03191e !important; opacity: 0.82; } .text-ink\/60, .text-ink\/75, .text-ink\/80 { color: #03191e !important; }</style></head>
+<body class="bg-canvas text-ink min-h-screen flex flex-col font-body selection:bg-pearl selection:text-ink pb-28" style="--ink-black: #03191e; color: rgb(3, 25, 30); font-optical-sizing: auto; font-family: Montserrat, sans-serif !important;">
+<!-- Clean, Friendly Navigation -->
+<header class="w-full border-b border-ink/40 bg-ink sticky top-0 z-40 backdrop-blur">
+<div class="max-w-[1280px] mx-auto px-6 lg:px-10 h-18 py-4 flex justify-between items-center">
+<div class="flex items-center gap-6">
+<div class="flex items-center gap-2.5">
+<span class="w-7 h-7 bg-pearl text-ink rounded-full flex items-center justify-center font-headline font-bold text-sm">
+          R
+        </span>
+<span class="font-headline font-bold tracking-tight text-lg text-canvas">
+          Resonance
+        </span>
+</div>
+
+
+</div>
+<!-- Audio Device Selection & Help -->
+
+</div>
+</header>
+<!-- Main Page Content -->
+<main class="w-full max-w-[1280px] mx-auto px-6 lg:px-10 pt-10 flex-grow">
+<!-- Editorial Page Intro -->
+<section class="max-w-3xl mb-12">
+<span class="text-xs font-bold uppercase tracking-widest text-subtle mb-3 block">Voice Conversation</span>
+<h1 class="text-3xl sm:text-4xl lg:text-[44px] font-headline font-bold tracking-tight text-ink leading-tight mb-3">
+      Choose your conversation partner
+    </h1>
+<p class="text-base sm:text-lg text-subtle leading-relaxed">
+      Select who you'd like to speak with, pick a voice style, and attach any reference notes before beginning the conversation.
+    </p>
+</section>
+<!-- 2-Column Balanced Architecture -->
+<div class="grid grid-cols-1 lg:grid-cols-12 gap-10 items-start">
+<!-- LEFT: Conversation Partner Selection (7 cols) -->
+<section class="lg:col-span-7 flex flex-col gap-5">
+<div class="flex items-center justify-between pb-2 border-b border-borderline">
+<h2 class="font-headline font-semibold text-lg text-ink">Advisors &amp; Specialists</h2>
+<span class="text-xs text-subtle">Click to select partner</span>
+</div>
+<div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+<!-- Card 1: Elena Vance (Selected) -->
+<article class="relative p-5 rounded-xl flex flex-col justify-between transition-shadow shadow-sm bg-canvas border border-borderline" style="background-color: rgb(235, 225, 193);">
+<div>
+<div class="flex justify-between items-start mb-4">
+<div class="relative w-12 h-12 rounded-full overflow-hidden border border-ink/20 shadow-inner bg-canvas-alt">
+<img alt="Dr. Elena Vance portrait" class="w-full h-full object-cover grayscale contrast-125" src="https://lh3.googleusercontent.com/aida-public/AB6AXuAqJNMnJBpjetZ535sTtsS-zH8iFsXOxk-QEuqFBAVxozV8JIno_gkFptFVp-sE1huwnLPcvzVwjp2GaQxRrLyYh5CYBBs0mMcvcu9V9e7XST3fPo-g-AIafTW-mLMAcNBrZIzeGE3GB25OJG8TYov1qfJIGypZJ-4tRu3r3Jwp18ukRej7q3RuHzlzOZszcRalCzT_uyDhgw6d-k324-ohTC80bE4qEHnk5VCtMMadZNxy39vdLN86">
+</div>
+<span class="inline-flex items-center gap-1 text-[11px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-ink text-canvas">
+<span class="material-symbols-outlined text-[13px]" data-icon="check">check</span>
+                Selected
+              </span>
+</div>
+<h3 class="font-headline font-bold text-lg text-ink mb-1">Dr. Elena Vance</h3>
+<p class="text-xs font-semibold uppercase tracking-wider text-ink/75 mb-2.5">Strategy &amp; Systems Advisor</p>
+<p class="text-sm text-ink/80 leading-relaxed mb-5">
+              Experienced partner for evaluating strategic roadmaps, tough trade-offs, and critical system decisions.
+            </p>
+</div>
+
+</article>
+<!-- Card 2: Marcus Thorne -->
+<article class="relative p-5 rounded-xl bg-canvas border border-borderline hover:border-ink/50 flex flex-col justify-between transition-all hover:bg-canvas-alt/40" style="background-color: rgb(235, 225, 193);">
+<div>
+<div class="flex justify-between items-start mb-4">
+<div class="relative w-12 h-12 rounded-full overflow-hidden border border-borderline bg-canvas-alt">
+<img alt="Marcus Thorne portrait" class="w-full h-full object-cover grayscale contrast-125" src="https://lh3.googleusercontent.com/aida-public/AB6AXuCyv9t1cqiF23kUdyLIxPcJ2aiTJUNlg-1idiC0ITYVMSn8dgiTwcMeglK0rP654pXAf3ceGqhXs5yPvZ0NufxnLIlm4hIcceHwHF8V7GW1G6xHfzJSvYZY5ShJMFIEws-x0g2n7GBgZfznth2oznpsn6oGS8hElV2B1QbEJfqvB4O2G46nxBH_d57TY3WVkj-weyYgJgzmCLm8EcRA6MLMZRCM8muZjOH39abq4ER_t7wp-FpHx2RD">
+</div>
+<button class="text-xs font-semibold uppercase tracking-wider px-2.5 py-1 rounded-full border border-borderline text-subtle hover:border-ink hover:text-ink transition-colors">
+                Select
+              </button>
+</div>
+<h3 class="font-headline font-bold text-lg text-ink mb-1">Marcus Thorne</h3>
+<p class="text-xs font-semibold uppercase tracking-wider text-subtle mb-2.5">Technical &amp; Architecture Lead</p>
+<p class="text-sm text-subtle leading-relaxed mb-5">
+              Focuses on technical architectures, code quality bottlenecks, and scalable engineering practices.
+            </p>
+</div>
+
+</article>
+<!-- Card 3: Sora Takahashi -->
+<article class="relative p-5 rounded-xl bg-canvas border border-borderline hover:border-ink/50 flex flex-col justify-between transition-all hover:bg-canvas-alt/40" style="background-color: rgb(235, 225, 193);">
+<div>
+<div class="flex justify-between items-start mb-4">
+<div class="relative w-12 h-12 rounded-full overflow-hidden border border-borderline bg-canvas-alt">
+<img alt="Sora Takahashi portrait" class="w-full h-full object-cover grayscale contrast-125" src="https://lh3.googleusercontent.com/aida-public/AB6AXuAZ_1M2mDj1xP2ze8NOSQyOS9SNMEqpmlWQE4n6GLzRQqD3jCCbA3tW5uEjpYAphNj4YXozGY4zE9gVEfg9JzvrtF2Fm_Tcd7l1FqGdzA0rUPJiAIl26KUJz_XjTQHs6qhXgIjyo2yhdKl843rIQnPjiZ0aS4xvEm6q20dJvGtUQ5YhQ-re0VUR7pw3dSGL1mOHBPYRFe3L6_1lbnk4biCJdih0uI6le_voxl9d5YncnWTz-Bg8qNR7">
+</div>
+<button class="text-xs font-semibold uppercase tracking-wider px-2.5 py-1 rounded-full border border-borderline text-subtle hover:border-ink hover:text-ink transition-colors">
+                Select
+              </button>
+</div>
+<h3 class="font-headline font-bold text-lg text-ink mb-1">Sora Takahashi</h3>
+<p class="text-xs font-semibold uppercase tracking-wider text-subtle mb-2.5">Product &amp; UX Partner</p>
+<p class="text-sm text-subtle leading-relaxed mb-5">
+              Helps clarify customer problems, design cohesive workflows, and remove usability friction.
+            </p>
+</div>
+
+</article>
+<!-- Card 4: Aria Sterling -->
+<article class="relative p-5 rounded-xl bg-canvas border border-borderline hover:border-ink/50 flex flex-col justify-between transition-all hover:bg-canvas-alt/40" style="background-color: rgb(235, 225, 193);">
+<div>
+<div class="flex justify-between items-start mb-4">
+<div class="relative w-12 h-12 rounded-full overflow-hidden border border-borderline bg-canvas-alt">
+<img alt="Aria Sterling portrait" class="w-full h-full object-cover grayscale contrast-125" src="https://lh3.googleusercontent.com/aida-public/AB6AXuDuJ0ZlDJmUMjpUCzzRc_tbdxBSff5j_e6t8hMvCmnn6WxwYnfSQimDr6ioPouBAB-vhBpbsWXGSCdjvvtKKDYb-3GuOtUmmkyRUncaigqrqDIJ8PA-HMAGwgfgTjptW7kqyxEyOcIXesQ06yynkRZ5xsCysZQFyiy79-XIY5rLH7w_yGv2dW6ZSQQOFFiv_Vc63deihlLSdGMqliZhVXkV3owyGyDA5krs_qlxrCIhTUJgvdpiD6Xc">
+</div>
+<button class="text-xs font-semibold uppercase tracking-wider px-2.5 py-1 rounded-full border border-borderline text-subtle hover:border-ink hover:text-ink transition-colors">
+                Select
+              </button>
+</div>
+<h3 class="font-headline font-bold text-lg text-ink mb-1">Aria Sterling</h3>
+<p class="text-xs font-semibold uppercase tracking-wider text-subtle mb-2.5">Executive Communications</p>
+<p class="text-sm text-subtle leading-relaxed mb-5">
+              Refines clarity, persuasive narrative structure, and high-impact executive presentation.
+            </p>
+</div>
+
+</article>
+</div>
+</section>
+<!-- RIGHT: Voice & Reference Notes (5 cols) -->
+<section class="lg:col-span-5 flex flex-col gap-6">
+<!-- Voice Style Box -->
+<div class="p-6 rounded-xl bg-canvas border border-borderline shadow-sm" style="background-color: rgb(235, 225, 193);">
+<div class="flex justify-between items-center pb-3 mb-4 border-b border-borderline">
+<h2 class="font-headline font-semibold text-lg text-ink">Voice Style</h2>
+<span class="text-xs text-subtle">Tone &amp; Delivery</span>
+</div>
+<!-- Voice Choices -->
+<div class="space-y-2.5 mb-5">
+<!-- Voice 1: Aura (Selected) -->
+<div class="p-3 rounded-lg border border-borderline hover:border-ink/40 bg-canvas hover:bg-canvas-alt/60 flex items-center justify-between cursor-pointer transition-colors" style="background-color: rgb(251, 251, 255);">
+<div class="flex items-center gap-3">
+<button class="w-8 h-8 rounded-full bg-canvas-alt border border-borderline text-ink flex items-center justify-center hover:bg-ink hover:text-canvas transition-colors" title="Audition Aura voice">
+<span class="material-symbols-outlined text-[18px]" data-icon="play_arrow">play_arrow</span>
+</button>
+<div>
+<span class="font-headline font-bold text-sm text-ink">Aura</span>
+<p class="text-xs text-subtle">Warm, natural, and articulate</p>
+</div>
+</div>
+
+</div>
+<!-- Voice 2: Echo -->
+<div class="p-3 rounded-lg border border-borderline hover:border-ink/40 bg-canvas hover:bg-canvas-alt/60 flex items-center justify-between cursor-pointer transition-colors" style="background-color: rgb(251, 251, 255);">
+<div class="flex items-center gap-3">
+<button class="w-8 h-8 rounded-full bg-canvas-alt border border-borderline text-ink flex items-center justify-center hover:bg-ink hover:text-canvas transition-colors" title="Audition Echo voice">
+<span class="material-symbols-outlined text-[18px]" data-icon="play_arrow">play_arrow</span>
+</button>
+<div>
+<span class="font-headline font-bold text-sm text-ink">Echo</span>
+<p class="text-xs text-subtle">Calm, clear, and grounded</p>
+</div>
+</div>
+
+</div>
+<!-- Voice 3: Orion -->
+<div class="p-3 rounded-lg border border-borderline hover:border-ink/40 bg-canvas hover:bg-canvas-alt/60 flex items-center justify-between cursor-pointer transition-colors" style="background-color: rgb(251, 251, 255);">
+<div class="flex items-center gap-3">
+<button class="w-8 h-8 rounded-full bg-canvas-alt border border-borderline text-ink flex items-center justify-center hover:bg-ink hover:text-canvas transition-colors" title="Audition Orion voice">
+<span class="material-symbols-outlined text-[18px]" data-icon="play_arrow">play_arrow</span>
+</button>
+<div>
+<span class="font-headline font-bold text-sm text-ink">Orion</span>
+<p class="text-xs text-subtle">Deep, steady, and authoritative</p>
+</div>
+</div>
+
+</div>
+</div>
+<!-- Speaking Pace -->
+
+</div>
+<!-- Reference Notes Upload -->
+<div class="p-6 rounded-xl bg-canvas border border-borderline shadow-sm" style="background-color: rgb(235, 225, 193);">
+<div class="flex justify-between items-center pb-3 mb-4 border-b border-borderline">
+<h2 class="font-headline font-semibold text-lg text-ink">Reference Notes</h2>
+<span class="text-xs font-semibold text-subtle">2 attached</span>
+</div>
+<!-- Friendly Dropzone -->
+<div class="border border-dashed border-borderline hover:border-ink/60 rounded-xl p-5 text-center cursor-pointer transition-all mb-4" style="background-color: rgb(251, 251, 255);">
+<div class="w-10 h-10 rounded-full border border-borderline mx-auto mb-2 flex items-center justify-center" style="background-color: #fbfbff; color: #03191e;">
+<span class="material-symbols-outlined text-[20px]" data-icon="upload_file" style="color: #03191e;">upload_file</span>
+</div>
+<p class="text-sm font-medium" style="color: #03191e;">Drop reference notes or slides</p>
+<p class="text-xs mt-0.5" style="color: #03191e; opacity: 0.8;">PDF, Word, or plain text up to 25MB</p>
+</div>
+<!-- Attached Documents List -->
+<div class="space-y-2">
+<div class="flex items-center justify-between p-2.5 rounded-lg border border-borderline bg-canvas">
+<div class="flex items-center gap-2.5 min-w-0">
+<span class="material-symbols-outlined text-subtle text-[20px]" data-icon="description">description</span>
+<div class="truncate">
+<p class="text-xs font-semibold text-ink truncate">Q3_Strategic_Roadmap_Draft.pdf</p>
+<p class="text-[11px] text-subtle">2.4 MB · 48 pages</p>
+</div>
+</div>
+<button class="text-subtle hover:text-rose-600 transition-colors p-1" title="Remove document">
+<span class="material-symbols-outlined text-[18px]" data-icon="close">close</span>
+</button>
+</div>
+<div class="flex items-center justify-between p-2.5 rounded-lg border border-borderline bg-canvas">
+<div class="flex items-center gap-2.5 min-w-0">
+<span class="material-symbols-outlined text-subtle text-[20px]" data-icon="description">description</span>
+<div class="truncate">
+<p class="text-xs font-semibold text-ink truncate">Engineering_System_Spec_v2.md</p>
+<p class="text-[11px] text-subtle">380 KB · Architecture outline</p>
+</div>
+</div>
+<button class="text-subtle hover:text-rose-600 transition-colors p-1" title="Remove document">
+<span class="material-symbols-outlined text-[18px]" data-icon="close">close</span>
+</button>
+</div>
+</div>
+</div>
+</section>
+</div>
+</main>
+<!-- Sticky Bottom Call Dock -->
+<footer class="fixed bottom-0 left-0 w-full z-50 bg-canvas/95 backdrop-blur border-t border-borderline">
+<div class="max-w-[1280px] mx-auto px-6 lg:px-10 py-3.5 flex items-center justify-between">
+<!-- Partner & Configuration Summary -->
+<div class="flex items-center gap-3">
+<div class="w-2.5 h-2.5 rounded-full bg-emerald-600"></div>
+<div class="flex flex-col sm:flex-row sm:items-center sm:gap-2">
+<span class="font-headline font-bold text-sm text-ink">Dr. Elena Vance</span>
+<span class="hidden sm:inline text-subtle">·</span>
+<span class="text-xs text-subtle">Voice: Aura · 2 documents attached</span>
+</div>
+</div>
+<!-- Actions -->
+<div class="flex items-center gap-3">
+<button class="hidden sm:inline-flex items-center gap-1.5 px-3.5 py-2 rounded-full border border-borderline text-ink hover:bg-canvas-alt text-xs font-semibold transition-colors">
+<span class="material-symbols-outlined text-[16px]" data-icon="mic">mic</span>
+        Test microphone
+      </button>
+<button class="inline-flex items-center gap-2 px-6 py-2.5 rounded-full bg-ink text-canvas font-semibold text-sm hover:bg-ink/90 shadow-sm transition-all active:scale-[0.98]">
+<span class="material-symbols-outlined text-[18px]" data-icon="call">call</span>
+        Start Call
+      </button>
+</div>
+</div>
+</footer>
+
+
+</body></html>

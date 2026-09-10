@@ -8,6 +8,9 @@ env/
 venv/
 myvenv/
 .venv/
+*.egg-info/
+dist/
+build/
 
 # Environment variables
 .env
@@ -41,5 +44,22 @@ backend/recordings/
 # Node
 node_modules/
 
-#test
+# Database
+*.sqlite3
+*.db
+
+# Cache
+.mypy_cache/
+.ruff_cache/
+
+# Backend local artifacts and generated files
+backend/voice_previews/
+backend/log/
+
+# Backend temporary scripts
+backend/debug_*.py
+backend/test_vad*.py
+backend/generate_voice_previews.py
+
+# Test
 backend/tests/

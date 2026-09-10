@@ -19,8 +19,18 @@ def mock_settings():
         mock.vad_aggressiveness = 2
         mock.silence_threshold_ms = 1500
         mock.audio_chunk_ms = 250
-        mock.gemini_model = "gemini-3.6-flash"
+        mock.gemini_model = "gemini-1.5-flash"
         mock.hf_token = ""
         mock.hf_hub_disable_symlinks_warning = False
         mock.embedding_device = "cpu"
+        mock.ws_heartbeat_interval_s = 20
+        mock.ws_receive_timeout_s = 180
+        mock.ws_max_concurrent_audio_tasks = 32
+        mock.ws_audio_executor_workers = 4
+        mock.ws_embedding_executor_workers = 2
+        mock.ws_queue_max_size = 256
+        mock.pinecone_api_key = ""
+        mock.pinecone_index_name = "voice-agent-documents"
+        mock.filler_threshold_ms = 1500
+        mock.use_new_pipeline = False
         yield mock

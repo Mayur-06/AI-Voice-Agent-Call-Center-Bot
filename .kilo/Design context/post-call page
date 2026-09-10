@@ -1,0 +1,573 @@
+<!DOCTYPE html><html lang="en" style=""><svg class="inline-defs-container" aria-hidden="true" style="position:absolute;width:0;height:0;overflow:hidden"></svg><head>
+<meta charset="utf-8">
+<meta content="width=device-width, initial-scale=1.0" name="viewport">
+<title>Aura Voice Studio - Session Debrief: Architecture &amp; Latency Discussion</title>
+<!-- Fonts -->
+<link href="https://fonts.googleapis.com" rel="preconnect">
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect">
+<link href="https://fonts.googleapis.com/css2?family=Montserrat:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<!-- Material Symbols -->
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet">
+<!-- Tailwind CSS -->
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<script id="tailwind-config">
+    tailwind.config = {
+      darkMode: "class",
+      theme: {
+        extend: {
+          colors: {
+            "ink-black": "#03191e",
+            "pearl-beige": "#ebe1c1",
+            "ghost-white": "#fbfbff",
+            "primary": "#03191e",
+            "primary-container": "#081e24",
+            "on-primary": "#ffffff",
+            "secondary-container": "#ebe1c1",
+            "on-secondary-container": "#696349",
+            "surface-container-lowest": "#ffffff",
+            "surface-container-low": "#f4f3f5",
+            "surface-container": "#eeedef",
+            "outline-variant": "#c2c7c9",
+            "outline": "#72787a",
+            "background": "#fbfbff",
+            "surface": "#fbfbff",
+            "on-surface": "#03191e",
+            "on-surface-variant": "#424849"
+          },
+          fontFamily: {
+            sans: ['Montserrat', 'sans-serif'],
+            mono: ['JetBrains Mono', 'monospace']
+          }
+        }
+      }
+    }
+  </script>
+<style>
+    *:not(.material-symbols-outlined) {
+      font-family: 'Montserrat', sans-serif !important;
+    }
+    .material-symbols-outlined {
+      font-family: 'Material Symbols Outlined' !important;
+      font-weight: normal;
+      font-style: normal;
+      font-size: 20px;
+      line-height: 1;
+      letter-spacing: normal;
+      text-transform: none;
+      display: inline-block;
+      white-space: nowrap;
+      word-wrap: normal;
+      direction: ltr;
+      -webkit-font-feature-settings: 'liga';
+      -webkit-font-smoothing: antialiased;
+    }
+    .font-mono-code {
+      font-family: 'JetBrains Mono', monospace !important;
+    }
+    /* Subtle custom scrollbar */
+    ::-webkit-scrollbar {
+      width: 5px;
+      height: 5px;
+    }
+    ::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: rgba(3, 25, 30, 0.12);
+      border-radius: 4px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: rgba(3, 25, 30, 0.25);
+    }
+  </style>
+</head>
+<body class="bg-[#fbfbff] text-[#03191e] min-h-screen flex flex-col antialiased selection:bg-[#ebe1c1] selection:text-[#03191e]"><svg class="inline-defs-container" aria-hidden="true" style="position:absolute;width:0;height:0;overflow:hidden"></svg>
+<meta charset="utf-8">
+<meta content="width=device-width, initial-scale=1.0" name="viewport">
+<title>Aura Voice Studio - Session Debrief: Architecture &amp; Latency Discussion</title>
+<!-- Fonts -->
+<link href="https://fonts.googleapis.com" rel="preconnect">
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect">
+<link href="https://fonts.googleapis.com/css2?family=Montserrat:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<!-- Material Symbols -->
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet">
+<!-- Tailwind CSS -->
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<script id="tailwind-config">
+    tailwind.config = {
+      darkMode: "class",
+      theme: {
+        extend: {
+          colors: {
+            "ink-black": "#03191e",
+            "pearl-beige": "#ebe1c1",
+            "ghost-white": "#fbfbff",
+            "primary": "#03191e",
+            "primary-container": "#081e24",
+            "on-primary": "#ffffff",
+            "secondary-container": "#ebe1c1",
+            "on-secondary-container": "#696349",
+            "surface-container-lowest": "#ffffff",
+            "surface-container-low": "#f4f3f5",
+            "surface-container": "#eeedef",
+            "outline-variant": "#c2c7c9",
+            "outline": "#72787a",
+            "background": "#fbfbff",
+            "surface": "#fbfbff",
+            "on-surface": "#03191e",
+            "on-surface-variant": "#424849"
+          },
+          fontFamily: {
+            sans: ['Montserrat', 'sans-serif'],
+            mono: ['JetBrains Mono', 'monospace']
+          }
+        }
+      }
+    }
+  </script>
+<style>
+    *:not(.material-symbols-outlined) {
+      font-family: 'Montserrat', sans-serif !important;
+    }
+    .material-symbols-outlined {
+      font-family: 'Material Symbols Outlined' !important;
+      font-weight: normal;
+      font-style: normal;
+      font-size: 20px;
+      line-height: 1;
+      letter-spacing: normal;
+      text-transform: none;
+      display: inline-block;
+      white-space: nowrap;
+      word-wrap: normal;
+      direction: ltr;
+      -webkit-font-feature-settings: 'liga';
+      -webkit-font-smoothing: antialiased;
+    }
+    .font-mono-code {
+      font-family: 'JetBrains Mono', monospace !important;
+    }
+    /* Subtle custom scrollbar */
+    ::-webkit-scrollbar {
+      width: 5px;
+      height: 5px;
+    }
+    ::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: rgba(3, 25, 30, 0.12);
+      border-radius: 4px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: rgba(3, 25, 30, 0.25);
+    }
+  </style>
+
+
+<!-- Minimal, Calm Top Navigation Bar -->
+<header class="bg-[#03191e] text-[#ebe1c1] w-full px-6 md:px-10 h-16 border-b border-[#03191e] z-40 flex justify-between items-center sticky top-0 shadow-sm">
+<!-- Left Segment: Back Link & Elegant Call Title -->
+<div class="flex items-center space-x-5">
+<a class="inline-flex items-center space-x-1.5 text-xs font-medium tracking-wide text-[#ebe1c1]/80 hover:text-[#fbfbff] transition-colors py-1.5 px-3 rounded-lg hover:bg-white/5" href="#">
+<span class="material-symbols-outlined text-[16px]">arrow_back</span>
+<span class="">New Session</span>
+</a>
+<span class="text-[#ebe1c1]/25 font-light">|</span>
+<div class="flex items-center space-x-3">
+<span class="text-sm font-semibold tracking-tight text-[#fbfbff]">Architecture &amp; Latency Discussion</span>
+<span class="hidden sm:inline-flex text-xs px-2.5 py-0.5 rounded-full bg-white/10 text-[#ebe1c1]/90 font-medium">
+        Today • 12m 45s
+      </span>
+</div>
+</div>
+<!-- Right Segment: Essential Clean Actions -->
+<div class="flex items-center space-x-3">
+<button class="inline-flex items-center space-x-1.5 px-3.5 py-1.5 text-xs font-semibold text-[#03191e] bg-[#ebe1c1] hover:bg-[#ded1ab] transition-all rounded-lg shadow-sm active:scale-95">
+<span class="material-symbols-outlined text-[16px]">download</span>
+<span class="">Export</span>
+</button>
+
+</div>
+</header>
+<!-- Main Canvas Layout (Editorial 2-Column: Main Discussion Flow vs Structured Sidebar) -->
+<main class="flex-1 max-w-[1440px] w-full mx-auto px-6 md:px-10 py-8 grid grid-cols-1 lg:grid-cols-12 gap-8">
+<!-- LEFT / MAIN CONTENT AREA (Audio Player, Key Takeaways, Synced Transcript) -->
+<div class="lg:col-span-7 xl:col-span-8 flex flex-col space-y-7">
+<!-- 1. Sleek, Minimalist Audio Player Card -->
+<section class="rounded-2xl border border-[#03191e]/10 p-6 shadow-[0_2px_12px_-4px_rgba(3,25,30,0.04)] bg-[#fbfbff]">
+<div class="flex flex-wrap items-center justify-between gap-4 pb-4">
+<!-- Play / Timer Info -->
+<div class="flex items-center space-x-4">
+<button class="w-12 h-12 rounded-full bg-[#03191e] text-[#ebe1c1] flex items-center justify-center hover:scale-105 active:scale-95 transition-all shadow-md focus:outline-none" id="mainPlayBtn">
+<span class="material-symbols-outlined text-[24px]">play_arrow</span>
+</button>
+<div>
+<div class="flex items-baseline space-x-2">
+<span class="text-xl font-semibold font-mono tracking-tight text-[#03191e]" id="currentTimeDisplay">04:12</span>
+<span class="text-xs text-[#03191e]/50 font-mono">/ 12:45</span>
+</div>
+<p class="text-xs text-[#03191e]/60 mt-0.5 font-normal">Playback sync active • Turn 5 of 24</p>
+</div>
+</div>
+<!-- Controls: Speed & Scrub helpers -->
+
+</div>
+<!-- Clean Waveform Bar Visualizer -->
+<div class="mt-3 relative group select-none">
+<div class="relative h-14 bg-[#fbfbff] border border-[#03191e]/10 rounded-xl overflow-hidden flex items-center px-3 cursor-pointer" id="waveformContainer">
+<!-- Waveform bar series -->
+<div class="w-full flex items-center justify-between gap-[3px] h-full py-2">
+<!-- Played bars (33% complete) -->
+<div class="w-[3px] h-[35%] bg-[#03191e] rounded-full"></div>
+<div class="w-[3px] h-[55%] bg-[#03191e] rounded-full"></div>
+<div class="w-[3px] h-[40%] bg-[#03191e] rounded-full"></div>
+<div class="w-[3px] h-[75%] bg-[#03191e] rounded-full"></div>
+<div class="w-[3px] h-[90%] bg-[#03191e] rounded-full"></div>
+<div class="w-[3px] h-[60%] bg-[#03191e] rounded-full"></div>
+<div class="w-[3px] h-[30%] bg-[#03191e] rounded-full"></div>
+<div class="w-[3px] h-[45%] bg-[#03191e] rounded-full"></div>
+<div class="w-[3px] h-[80%] bg-[#03191e] rounded-full"></div>
+<div class="w-[3px] h-[100%] bg-[#03191e] rounded-full"></div>
+<div class="w-[3px] h-[65%] bg-[#03191e] rounded-full"></div>
+<div class="w-[3px] h-[45%] bg-[#03191e] rounded-full"></div>
+<div class="w-[3px] h-[55%] bg-[#03191e] rounded-full"></div>
+<div class="w-[3px] h-[70%] bg-[#03191e] rounded-full"></div>
+<div class="w-[3px] h-[85%] bg-[#03191e] rounded-full"></div>
+<div class="w-[3px] h-[40%] bg-[#03191e] rounded-full"></div>
+<div class="w-[3px] h-[60%] bg-[#03191e] rounded-full"></div>
+<div class="w-[3px] h-[75%] bg-[#03191e] rounded-full"></div>
+<div class="w-[3px] h-[95%] bg-[#03191e] rounded-full"></div>
+<div class="w-[3px] h-[65%] bg-[#03191e] rounded-full"></div>
+<div class="w-[3px] h-[50%] bg-[#03191e] rounded-full"></div>
+<div class="w-[3px] h-[70%] bg-[#03191e] rounded-full"></div>
+<div class="w-[3px] h-[85%] bg-[#03191e] rounded-full"></div>
+<!-- Remaining bars (Soft neutral pearl-tinted tone) -->
+<div class="w-[3px] h-[45%] bg-[#03191e]/20 rounded-full"></div>
+<div class="w-[3px] h-[30%] bg-[#03191e]/20 rounded-full"></div>
+<div class="w-[3px] h-[65%] bg-[#03191e]/20 rounded-full"></div>
+<div class="w-[3px] h-[80%] bg-[#03191e]/20 rounded-full"></div>
+<div class="w-[3px] h-[60%] bg-[#03191e]/20 rounded-full"></div>
+<div class="w-[3px] h-[40%] bg-[#03191e]/20 rounded-full"></div>
+<div class="w-[3px] h-[25%] bg-[#03191e]/20 rounded-full"></div>
+<div class="w-[3px] h-[45%] bg-[#03191e]/20 rounded-full"></div>
+<div class="w-[3px] h-[90%] bg-[#03191e]/20 rounded-full"></div>
+<div class="w-[3px] h-[75%] bg-[#03191e]/20 rounded-full"></div>
+<div class="w-[3px] h-[35%] bg-[#03191e]/20 rounded-full"></div>
+<div class="w-[3px] h-[55%] bg-[#03191e]/20 rounded-full"></div>
+<div class="w-[3px] h-[70%] bg-[#03191e]/20 rounded-full"></div>
+<div class="w-[3px] h-[85%] bg-[#03191e]/20 rounded-full"></div>
+<div class="w-[3px] h-[45%] bg-[#03191e]/20 rounded-full"></div>
+<div class="w-[3px] h-[30%] bg-[#03191e]/20 rounded-full"></div>
+<div class="w-[3px] h-[50%] bg-[#03191e]/20 rounded-full"></div>
+<div class="w-[3px] h-[70%] bg-[#03191e]/20 rounded-full"></div>
+<div class="w-[3px] h-[40%] bg-[#03191e]/20 rounded-full"></div>
+<div class="w-[3px] h-[35%] bg-[#03191e]/20 rounded-full"></div>
+<div class="w-[3px] h-[60%] bg-[#03191e]/20 rounded-full"></div>
+<div class="w-[3px] h-[85%] bg-[#03191e]/20 rounded-full"></div>
+<div class="w-[3px] h-[65%] bg-[#03191e]/20 rounded-full"></div>
+<div class="w-[3px] h-[45%] bg-[#03191e]/20 rounded-full"></div>
+<div class="w-[3px] h-[30%] bg-[#03191e]/20 rounded-full"></div>
+<div class="w-[3px] h-[55%] bg-[#03191e]/20 rounded-full"></div>
+<div class="w-[3px] h-[75%] bg-[#03191e]/20 rounded-full"></div>
+<div class="w-[3px] h-[45%] bg-[#03191e]/20 rounded-full"></div>
+<div class="w-[3px] h-[25%] bg-[#03191e]/20 rounded-full"></div>
+</div>
+<!-- Scrub Marker -->
+<div class="absolute left-[33%] top-0 bottom-0 w-[2px] bg-[#03191e] pointer-events-none">
+<div class="absolute -top-1 -left-[4px] w-2.5 h-2.5 bg-[#03191e] rounded-full shadow"></div>
+</div>
+</div>
+<div class="flex justify-between text-[11px] font-mono text-[#03191e]/50 mt-1.5 px-0.5">
+<span class="">00:00</span>
+<span class="">04:12</span>
+<span class="">12:45</span>
+</div>
+</div>
+</section>
+<!-- 2. Warm Key Takeaways & Agreed Decisions Card -->
+<section class="rounded-2xl border border-[#03191e]/10 p-6 shadow-[0_2px_12px_-4px_rgba(3,25,30,0.04)] bg-[#fbfbff]">
+  <div class="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-[#03191e]/10">
+    <div class="flex items-center space-x-2.5">
+      <span class="material-symbols-outlined text-[22px] text-[#03191e]">monitoring</span>
+      <h2 class="text-base font-semibold text-[#03191e] tracking-tight">Sentiment &amp; Engagement Flow</h2>
+    </div>
+    <div class="flex items-center space-x-3 text-xs">
+      <span class="inline-flex items-center gap-1 text-[#03191e]/70">
+        <span class="w-2 h-2 rounded-full bg-[#03191e]"></span> High Alignment (+84%)
+      </span>
+      <span class="text-[#03191e]/30">|</span>
+      <span class="text-[#03191e]/60 font-mono">Avg Valence: +0.68</span>
+    </div>
+  </div>
+  <div class="mt-4">
+    <div class="w-full h-44 relative">
+      <svg class="w-full h-full overflow-visible" viewBox="0 0 760 160" fill="none" preserveAspectRatio="none">
+        <defs>
+          <linearGradient id="sentimentGradient" x1="0%" y1="0%" x2="0%" y2="100%">
+            <stop offset="0%" stop-color="#ebe1c1" stop-opacity="0.75"></stop>
+            <stop offset="70%" stop-color="#ebe1c1" stop-opacity="0.15"></stop>
+            <stop offset="100%" stop-color="#ebe1c1" stop-opacity="0.0"></stop>
+          </linearGradient>
+        </defs>
+        <line x1="0" y1="100" x2="760" y2="100" stroke="#03191e" stroke-opacity="0.1" stroke-dasharray="4 4" stroke-width="1"></line>
+        <line x1="0" y1="50" x2="760" y2="50" stroke="#03191e" stroke-opacity="0.06" stroke-dasharray="4 4" stroke-width="1"></line>
+        <line x1="0" y1="140" x2="760" y2="140" stroke="#03191e" stroke-opacity="0.06" stroke-dasharray="4 4" stroke-width="1"></line>
+        <path d="M 0,100 C 60,100 100,75 145,70 C 190,65 240,40 280,38 C 330,36 370,82 420,85 C 470,88 500,45 540,42 C 600,38 680,48 760,45 L 760,160 L 0,160 Z" fill="url(#sentimentGradient)"></path>
+        <path d="M 0,100 C 60,100 100,75 145,70 C 190,65 240,40 280,38 C 330,36 370,82 420,85 C 470,88 500,45 540,42 C 600,38 680,48 760,45" stroke="#03191e" stroke-width="2.5" stroke-linecap="round"></path>
+        <circle cx="145" cy="70" r="4" fill="#fbfbff" stroke="#03191e" stroke-width="2"></circle>
+        <circle cx="280" cy="38" r="5" fill="#ebe1c1" stroke="#03191e" stroke-width="2.5"></circle>
+        <circle cx="420" cy="85" r="4" fill="#fbfbff" stroke="#03191e" stroke-width="2"></circle>
+        <circle cx="540" cy="42" r="5" fill="#03191e" stroke="#ebe1c1" stroke-width="2"></circle>
+      </svg>
+      <div class="absolute left-[33%] top-0 bottom-6 w-[1px] bg-[#03191e]/30 pointer-events-none border-l border-dashed border-[#03191e]/40"></div>
+    </div>
+    <div class="grid grid-cols-4 gap-2 pt-3 border-t border-[#03191e]/10 text-[11px]">
+      <div class="space-y-0.5">
+        <span class="font-mono text-[#03191e]/50 block">00:00 • Intro</span>
+        <p class="font-medium text-[#03191e]">Neutral Baseline</p>
+      </div>
+      <div class="space-y-0.5">
+        <span class="font-mono text-[#03191e]/50 block">02:15 • Latency Clarification</span>
+        <p class="font-medium text-[#03191e]">High Alignment</p>
+      </div>
+      <div class="space-y-0.5">
+        <span class="font-mono text-[#03191e]/50 block">03:30 • Buffer Inquiry</span>
+        <p class="font-medium text-[#03191e]">Technical Deep-dive</p>
+      </div>
+      <div class="space-y-0.5 text-right">
+        <span class="font-mono text-[#03191e]/50 block">04:12 • Active Playhead</span>
+        <p class="font-medium text-[#03191e]">Synthesis &amp; Consensus</p>
+      </div>
+    </div>
+  </div>
+</section>
+<!-- 3. Clean Conversation Transcript -->
+<section class="rounded-2xl border border-[#03191e]/10 p-6 shadow-[0_2px_12px_-4px_rgba(3,25,30,0.04)] flex flex-col bg-[#fbfbff]">
+<!-- Transcript Header & Subtle Search Filter -->
+<div class="flex flex-wrap items-center justify-between gap-3 pb-5 border-b border-[#03191e]/10">
+<div class="flex items-center space-x-2.5">
+<span class="material-symbols-outlined text-[20px] text-[#03191e]">forum</span>
+<h2 class="text-base font-semibold text-[#03191e] tracking-tight">Conversation Transcript</h2>
+
+</div>
+<div class="flex items-center space-x-4">
+<div class="relative">
+<span class="material-symbols-outlined absolute left-2.5 top-1/2 -translate-y-1/2 text-[16px] text-[#03191e]/40">search</span>
+<input class="pl-8 pr-3 py-1.5 text-xs bg-[#fbfbff] border border-[#03191e]/15 rounded-lg w-48 sm:w-60 focus:outline-none focus:ring-1 focus:ring-[#03191e] text-[#03191e] placeholder-[#03191e]/40" placeholder="Search transcript..." type="text">
+</div>
+<label class="hidden sm:flex items-center space-x-1.5 text-xs text-[#03191e]/70 cursor-pointer select-none">
+
+
+</label>
+</div>
+</div>
+<!-- Dialogue Stream -->
+<div class="mt-6 space-y-6 max-h-[640px] overflow-y-auto pr-2">
+<!-- Turn 1: Aura -->
+<div class="flex flex-col items-start max-w-[85%]">
+<div class="flex items-center space-x-2 mb-1.5 pl-1">
+<span class="text-xs font-semibold text-[#03191e]">Aura</span>
+<span class="text-[11px] font-mono text-[#03191e]/50">00:00</span>
+</div>
+<div class="bg-[#ebe1c1] text-[#03191e] px-5 py-3.5 rounded-2xl rounded-bl-sm text-sm leading-relaxed border border-[#03191e]/10">
+            Good morning. I've gone through your architecture notes and the latest pipeline benchmarks. Where would you like to begin our focus today?
+          </div>
+</div>
+<!-- Turn 2: You -->
+<div class="flex flex-col items-end max-w-[85%] ml-auto">
+<div class="flex items-center space-x-2 mb-1.5 pr-1">
+<span class="text-[11px] font-mono text-[#03191e]/50">00:48</span>
+<span class="text-xs font-semibold text-[#03191e]">You</span>
+</div>
+<div class="text-[#03191e] px-5 py-3.5 rounded-2xl rounded-br-sm border border-[#03191e]/15 text-sm leading-relaxed shadow-xs bg-[#fbfbff]">
+            Let's start with the connection latency bottleneck. Are we dropping packets during the initial handshake under higher load?
+          </div>
+</div>
+<!-- Turn 3: Aura -->
+<div class="flex flex-col items-start max-w-[85%]">
+<div class="flex items-center space-x-2 mb-1.5 pl-1">
+<span class="text-xs font-semibold text-[#03191e]">Aura</span>
+<span class="text-[11px] font-mono text-[#03191e]/50">02:15</span>
+</div>
+<div class="bg-[#ebe1c1] text-[#03191e] px-5 py-3.5 rounded-2xl rounded-bl-sm text-sm leading-relaxed border border-[#03191e]/10">
+            The initial handshake holds quite steady around 18 milliseconds. The friction really happens when fallback servers step in during traffic spikes, causing small bursts of jitter.
+          <div><br></div></div>
+</div>
+<!-- Turn 4: You -->
+<div class="flex flex-col items-end max-w-[85%] ml-auto">
+<div class="flex items-center space-x-2 mb-1.5 pr-1">
+<span class="text-[11px] font-mono text-[#03191e]/50">03:30</span>
+<span class="text-xs font-semibold text-[#03191e]">You</span>
+</div>
+<div class="text-[#03191e] px-5 py-3.5 rounded-2xl rounded-br-sm border border-[#03191e]/15 text-sm leading-relaxed shadow-xs bg-[#fbfbff]">
+            Could a lightweight relay buffer absorb those spikes without adding noticeable lag?
+          </div>
+</div>
+<!-- Turn 5: Aura (Currently Playing) -->
+<div class="flex flex-col items-start max-w-[88%]">
+<div class="flex items-center space-x-2 mb-1.5 pl-1">
+<span class="text-xs font-semibold text-[#03191e] flex items-center gap-1.5">
+<span class="w-2 h-2 rounded-full bg-emerald-600 animate-pulse"></span>
+              Aura
+            </span>
+<span class="text-[11px] font-mono text-[#03191e]/60">04:12</span>
+<span class="text-[10px] px-2 py-0.5 rounded-full bg-[#03191e] text-[#ebe1c1] font-medium inline-flex items-center gap-1">
+<span class="material-symbols-outlined text-[12px]">volume_up</span>
+              Now playing
+            </span>
+</div>
+<div class="bg-[#ebe1c1] text-[#03191e] p-5 rounded-2xl rounded-bl-sm border-2 border-[#03191e] shadow-sm text-sm leading-relaxed">
+<p class="">
+              Precisely. A 20ms adaptive jitter buffer on the edge relay would smooth out the spike without perceived conversational latency.
+            </p>
+<div class="mt-3.5 pt-2.5 border-t border-[#03191e]/15 flex items-center justify-between text-xs text-[#03191e]/75">
+
+
+</div>
+</div>
+</div>
+</div>
+</section>
+</div>
+<!-- RIGHT SIDEBAR (Overview, Action Items, Archival Export) -->
+<div class="lg:col-span-5 xl:col-span-4 flex flex-col space-y-7">
+<!-- 1. Essential Summary & Overview -->
+<section class="rounded-2xl border border-[#03191e]/10 p-6 shadow-[0_2px_12px_-4px_rgba(3,25,30,0.04)] bg-[#ebe1c1]">
+<h3 class="text-sm font-semibold uppercase tracking-wider text-[#03191e]/60 mb-4">Meeting Overview</h3>
+<div class="space-y-4 text-sm text-[#03191e]">
+<div>
+<span class="text-xs text-[#03191e]/50 block">Purpose</span>
+<p class="font-medium mt-0.5">Architecture &amp; Edge Handshake Review</p>
+</div>
+<div class="grid grid-cols-2 gap-3 pt-2 border-t border-[#03191e]/10">
+<div>
+<span class="text-xs text-[#03191e]/50 block">Participants</span>
+<p class="font-medium mt-0.5">You &amp; Aura</p>
+</div>
+<div>
+<span class="text-xs text-[#03191e]/50 block">Duration</span>
+<p class="font-medium mt-0.5">12m 45s</p>
+</div>
+</div>
+<div class="grid grid-cols-2 gap-3 pt-2 border-t border-[#03191e]/10">
+<div>
+<span class="text-xs text-[#03191e]/50 block">Dialogue Flow</span>
+<p class="font-medium mt-0.5">24 Turns</p>
+</div>
+<div>
+<span class="text-xs text-[#03191e]/50 block">Date</span>
+<p class="font-medium mt-0.5">Today, 10:48 AM</p>
+</div>
+</div>
+</div>
+</section><section class="bg-[#ebe1c1] rounded-2xl border border-[#03191e]/10 p-6 md:p-7 shadow-[0_2px_12px_-4px_rgba(3,25,30,0.03)]">
+<div class="flex items-center space-x-2.5 pb-4 border-b border-[#03191e]/15">
+<span class="material-symbols-outlined text-[#03191e] text-[22px]">lightbulb</span>
+<h2 class="text-base font-semibold text-[#03191e] tracking-tight">Key Takeaways &amp; Agreed Decisions</h2>
+</div>
+<div class="mt-5 space-y-3.5 text-sm text-[#03191e] leading-relaxed">
+<div class="flex items-start space-x-3">
+<span class="w-1.5 h-1.5 rounded-full bg-[#03191e] mt-2 shrink-0"></span>
+<p class="">Initial connection latency remains solid and responsive under standard conditions.</p>
+</div>
+<div class="flex items-start space-x-3">
+<span class="w-1.5 h-1.5 rounded-full bg-[#03191e] mt-2 shrink-0"></span>
+<p class="">The occasional friction during peak traffic is traced to fallback server handoffs rather than local processing.</p>
+</div>
+<div class="flex items-start space-x-3">
+<span class="w-1.5 h-1.5 rounded-full bg-[#03191e] mt-2 shrink-0"></span>
+<p class="">Agreed to add a small adaptive relay buffer at the network edge to smooth out transitions without adding perceptible delay.</p>
+</div>
+</div>
+</section>
+<!-- 2. Action Items (Clean Checkboxes) -->
+
+<!-- 3. Export Card -->
+<section class="bg-[#ebe1c1] rounded-2xl border border-[#03191e]/10 p-5 md:p-6 shadow-[0_2px_12px_-4px_rgba(3,25,30,0.03)]"><div class="flex items-center justify-between pb-3.5 border-b border-[#03191e]/15"><div class="flex items-center space-x-2"><h3 class="text-xs font-semibold uppercase tracking-wider text-[#03191e]/70">Call Metrics</h3></div></div><div class="mt-4 space-y-3.5 text-xs text-[#03191e]"><div class="grid grid-cols-2 gap-3 pb-3 border-b border-[#03191e]/10"><div><span class="text-[11px] text-[#03191e]/60 block">Call Duration</span><p class="font-medium font-mono text-sm mt-0.5 text-[#03191e]">12m 45s</p></div><div><span class="text-[11px] text-[#03191e]/60 block">Dialogue Turns</span><p class="font-medium font-mono text-sm mt-0.5 text-[#03191e]">24 Turns</p></div></div><div class="flex items-baseline justify-between pt-0.5"><div><span class="text-[11px] text-[#03191e]/60 block">Avg Latency</span><p class="font-medium font-mono text-base mt-0.5 text-[#03191e]">18ms <span class="text-xs font-normal text-[#03191e]/60 font-sans">avg</span></p></div><div class="text-right"><span class="text-[11px] font-mono text-[#03191e]/60 block">P95: 24ms · Optimal</span><span class="text-[10px] text-[#03191e]/50">Stream latency</span></div></div></div></section><section class="rounded-2xl border border-[#03191e]/10 p-6 shadow-[0_2px_12px_-4px_rgba(3,25,30,0.04)] bg-[#ebe1c1]">
+<h3 class="text-sm font-semibold uppercase tracking-wider text-[#03191e]/60 mb-4">ExportS</h3>
+<div class="grid grid-cols-3 gap-2.5">
+<!-- TXT -->
+<button class="flex flex-col items-center justify-center p-3 rounded-xl border border-[#03191e]/10 hover:border-[#03191e]/30 hover:bg-[#ebe1c1]/20 transition group">
+<span class="material-symbols-outlined text-[#03191e] text-[20px] mb-1">description</span>
+<span class="text-xs font-semibold text-[#03191e]">TXT</span>
+<span class="text-[10px] text-[#03191e]/50">Transcript</span>
+</button>
+<!-- PDF -->
+<button class="flex flex-col items-center justify-center p-3 rounded-xl border border-[#03191e]/10 hover:border-[#03191e]/30 hover:bg-[#ebe1c1]/20 transition group">
+<span class="material-symbols-outlined text-[#03191e] text-[20px] mb-1">picture_as_pdf</span>
+<span class="text-xs font-semibold text-[#03191e]">PDF</span>
+<span class="text-[10px] text-[#03191e]/50">Summary</span>
+</button>
+<!-- MP3 -->
+<button class="flex flex-col items-center justify-center p-3 rounded-xl border border-[#03191e]/10 hover:border-[#03191e]/30 hover:bg-[#ebe1c1]/20 transition group">
+<span class="material-symbols-outlined text-[#03191e] text-[20px] mb-1">audio_file</span>
+<span class="text-xs font-semibold text-[#03191e]">MP3</span>
+<span class="text-[10px] text-[#03191e]/50">Full Audio</span>
+</button>
+</div>
+<!-- One-click Copy Markdown Summary -->
+<button class="mt-4 w-full py-3 px-4 rounded-xl bg-[#03191e] hover:bg-[#03191e]/90 text-[#fbfbff] text-xs font-semibold flex items-center justify-center space-x-2 transition-all active:scale-[0.98] shadow-sm" id="copySummaryBtn">
+<span class="material-symbols-outlined text-[16px]">content_copy</span>
+<span class="">Copy JSON Content</span>
+</button>
+</section>
+</div>
+</main>
+<!-- Minimal Footer -->
+
+<!-- Interactive Scripts for audio toggle and copy feedback -->
+<script>
+  document.addEventListener('DOMContentLoaded', () => {
+    const playBtn = document.getElementById('mainPlayBtn');
+    let isPlaying = false;
+    
+    playBtn.addEventListener('click', () => {
+      isPlaying = !isPlaying;
+      const icon = playBtn.querySelector('.material-symbols-outlined');
+      if (isPlaying) {
+        icon.textContent = 'pause';
+      } else {
+        icon.textContent = 'play_arrow';
+      }
+    });
+
+    const copyBtn = document.getElementById('copySummaryBtn');
+    copyBtn.addEventListener('click', () => {
+      const originalContent = copyBtn.innerHTML;
+      copyBtn.innerHTML = `
+        <span class="material-symbols-outlined text-[16px] text-[#ebe1c1]">check_circle</span>
+        <span class="text-[#ebe1c1]">Summary Copied</span>
+      `;
+      setTimeout(() => {
+        copyBtn.innerHTML = originalContent;
+      }, 2000);
+    });
+
+    // Waveform seek update
+    const waveform = document.getElementById('waveformContainer');
+    waveform.addEventListener('click', (e) => {
+      const rect = waveform.getBoundingClientRect();
+      const clickX = e.clientX - rect.left;
+      const width = rect.width;
+      const percentage = Math.max(0, Math.min(100, (clickX / width) * 100));
+      
+      const scrubLine = waveform.querySelector('.absolute');
+      if (scrubLine) {
+        scrubLine.style.left = `${percentage}%`;
+      }
+
+      const totalSeconds = 12 * 60 + 45;
+      const currentSec = Math.floor((percentage / 100) * totalSeconds);
+      const mins = String(Math.floor(currentSec / 60)).padStart(2, '0');
+      const secs = String(currentSec % 60).padStart(2, '0');
+      const timeDisplay = document.getElementById('currentTimeDisplay');
+      if (timeDisplay) {
+        timeDisplay.textContent = `${mins}:${secs}`;
+      }
+    });
+  });
+</script>
+
+
+</body></html>

@@ -1,23 +1,59 @@
 import logging
-import asyncio
-import json
+import os
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, WebSocket
-from fastapi.responses import StreamingResponse
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
-from app.routers import auth, personas, sessions, documents, voices, analytics, test
+from app.routers import personas, sessions, documents, voices, analytics
+from app.routers import transcripts, recordings, sentiment as sentiment_router, metrics, exports
 from app.websocket.handler import router as ws_router
-from app.services.rag import check_chromadb_health
+from app.services.rag import check_pinecone_health
+from app.services.storage import ensure_recordings_bucket, ensure_documents_bucket
 
-logging.basicConfig(level=logging.INFO)
+# Ensure log directory exists
+log_dir = os.path.join(os.path.dirname(__file__), "..", "log")
+os.makedirs(log_dir, exist_ok=True)
+
+# Configure logging to both console and file
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler(os.path.join(log_dir, "backend.log"), mode="a"),
+    ],
+)
 logger = logging.getLogger(__name__)
+
+# Ensure VAD logger propagates
+logging.getLogger("app.services.vad").setLevel(logging.INFO)
+logging.getLogger("app.orchestration.stages").setLevel(logging.INFO)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    check_chromadb_health()
-    yield
+    logger.info("Startup: supabase_url=%s anon_key=%s service_key=%s cwd=%s", bool(settings.supabase_url), bool(settings.supabase_anon_key), bool(settings.supabase_service_role_key), __import__("os").getcwd())
+    check_pinecone_health()
+    ensure_documents_bucket()
+    ensure_recordings_bucket()
+    app.state.audio_executor = ThreadPoolExecutor(
+        max_workers=settings.ws_audio_executor_workers,
+        thread_name_prefix="audio",
+    )
+    app.state.vad_executor = ThreadPoolExecutor(
+        max_workers=1,
+        thread_name_prefix="vad",
+    )
+    app.state.embedding_executor = ProcessPoolExecutor(
+        max_workers=settings.ws_embedding_executor_workers,
+    )
+    try:
+        yield
+    finally:
+        app.state.audio_executor.shutdown(wait=True)
+        app.state.vad_executor.shutdown(wait=True)
+        app.state.embedding_executor.shutdown(wait=True)
 
 
 app = FastAPI(title="AI Voice Agent Backend", version="1.0.0", lifespan=lifespan)
@@ -36,21 +72,14 @@ async def health():
     return {"status": "ok"}
 
 
-@app.get("/test/logs")
-async def stream_logs(session: str = "global"):
-    async def event_generator():
-        from app.websocket.handler import _stream_session_logs
-        async for line in _stream_session_logs(session):
-            yield line
-
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
-
-
-app.include_router(auth.router)
 app.include_router(personas.router)
 app.include_router(sessions.router)
 app.include_router(documents.router)
 app.include_router(voices.router)
 app.include_router(analytics.router)
 app.include_router(ws_router)
-app.include_router(test.router)
+app.include_router(transcripts.router)
+app.include_router(recordings.router)
+app.include_router(sentiment_router.router)
+app.include_router(metrics.router)
+app.include_router(exports.router)

@@ -1,32 +1,243 @@
-from datetime import datetime
-from app.models.database import get_supabase
+import logging
+import statistics
+import uuid
+from datetime import datetime, timezone
+from app.models.database import get_supabase, run_supabase
+
+logger = logging.getLogger(__name__)
+
+_PERSONA_SLUG_MAP = {
+    "neha": "Neha",
+    "alena": "Alena",
+    "sora": "Sora",
+    "aria": "Aria",
+}
 
 
-async def create_session(persona_id: str, user_id: str | None = None, metadata: dict | None = None) -> str:
-    supabase = get_supabase()
-    res = supabase.table("sessions").insert({
-        "persona_id": persona_id,
-        "user_id": user_id,
-        "metadata": metadata or {},
-        "started_at": datetime.utcnow().isoformat(),
-    }).execute()
-    return res.data[0]["id"]
+async def _get_default_persona_id() -> str:
+    client = get_supabase()
+    try:
+        res = await run_supabase(lambda: client.table("personas").select("id").eq("name", "default").limit(1).execute())
+        if res.data:
+            return res.data[0]["id"]
+    except Exception:
+        pass
+    try:
+        res = await run_supabase(lambda: client.table("personas").select("id").limit(1).execute())
+        if res.data:
+            return res.data[0]["id"]
+    except Exception:
+        pass
+    raise RuntimeError("No personas available")
+
+
+async def resolve_persona_id(persona_id: str) -> str:
+    if not persona_id:
+        return await _get_default_persona_id()
+    try:
+        uuid.UUID(persona_id)
+        return persona_id
+    except ValueError:
+        pass
+    name = _PERSONA_SLUG_MAP.get(persona_id, persona_id)
+    client = get_supabase()
+    try:
+        res = await run_supabase(lambda: client.table("personas").select("id").eq("name", name).limit(1).execute())
+        if res.data:
+            return res.data[0]["id"]
+    except Exception:
+        pass
+    return await _get_default_persona_id()
+
+
+async def create_session(
+    persona_id: str,
+    user_id: str | None = None,
+    metadata: dict | None = None,
+    session_id: str | None = None,
+    status: str = "active",
+    selected_voice: str | None = None,
+) -> str:
+    client = get_supabase()
+
+    if session_id:
+        existing = await run_supabase(lambda: client.table("sessions").select("id").eq("id", session_id).execute())
+        if existing.data:
+            return existing.data[0]["id"]
+
+    resolved_user_id = user_id or str(uuid.uuid4())
+    payload = {
+        "persona_id": str(persona_id),
+        "user_id": str(resolved_user_id),
+        "status": status,
+        "selected_voice": selected_voice,
+        "started_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if session_id:
+        payload["id"] = str(session_id)
+    res = await run_supabase(lambda: client.table("sessions").insert(payload).execute())
+    return str(res.data[0]["id"])
 
 
 async def save_turn(session_id: str, speaker: str, text: str, sentiment: str | None = None,
-                    latency_ms: int | None = None, interrupted: bool = False):
-    supabase = get_supabase()
-    supabase.table("turns").insert({
+                    latency_ms: int | None = None, interrupted: bool = False,
+                    stt_latency_ms: int | None = None, llm_latency_ms: int | None = None,
+                    tts_first_audio_latency_ms: int | None = None,
+                    recording_start_ms: int | None = None, recording_end_ms: int | None = None,
+                    message_id: str | None = None):
+    client = get_supabase()
+    seq = 0
+    try:
+        existing = await run_supabase(
+            lambda: client.table("messages")
+            .select("sequence_number")
+            .eq("session_id", session_id)
+            .order("sequence_number", desc=True)
+            .limit(1)
+            .execute()
+        )
+        if existing.data:
+            seq = existing.data[0]["sequence_number"] + 1
+    except Exception:
+        pass
+    payload = {
         "session_id": session_id,
         "speaker": speaker,
         "text": text,
         "sentiment": sentiment,
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "latency_ms": latency_ms,
         "interrupted": interrupted,
-    }).execute()
+        "sequence_number": seq,
+        "stt_latency_ms": stt_latency_ms,
+        "llm_latency_ms": llm_latency_ms,
+        "tts_first_audio_latency_ms": tts_first_audio_latency_ms,
+        "recording_start_ms": recording_start_ms,
+        "recording_end_ms": recording_end_ms,
+    }
+    if message_id:
+        payload["id"] = str(message_id)
+    res = await run_supabase(lambda: client.table("messages").insert(payload).execute())
+    inserted = res.data[0] if isinstance(res.data, list) and res.data else {}
+    return str(inserted.get("id")) if inserted.get("id") else None
 
 
-async def end_session(session_id: str):
-    supabase = get_supabase()
-    supabase.table("sessions").update({"ended_at": datetime.utcnow().isoformat()}).eq("id", session_id).execute()
+async def load_turns(session_id: str) -> list[dict[str, str]]:
+    client = get_supabase()
+    res = await run_supabase(lambda: client.table("messages").select("speaker,text").eq("session_id", session_id).order("sequence_number").execute())
+    return [{"role": row["speaker"], "content": row["text"]} for row in (res.data or [])]
+
+
+async def load_messages(session_id: str) -> list[dict]:
+    client = get_supabase()
+    res = await run_supabase(lambda: client.table("messages").select("*").eq("session_id", session_id).order("sequence_number").execute())
+    return res.data or []
+
+
+async def load_session(session_id: str) -> dict | None:
+    client = get_supabase()
+    res = await run_supabase(lambda: client.table("sessions").select("*").eq("id", session_id).limit(1).execute())
+    if res.data:
+        return res.data[0]
+    return None
+
+
+async def end_session(session_id: str, recording_url: str | None = None, summary: str | None = None):
+    client = get_supabase()
+    ended_at = datetime.now(timezone.utc).isoformat()
+
+    session = await load_session(session_id)
+    if not session:
+        return
+
+    started_at = session.get("started_at")
+    duration = 0.0
+    if started_at:
+        try:
+            start_dt = datetime.fromisoformat(started_at.replace("Z", "+00:00"))
+            end_dt = datetime.fromisoformat(ended_at.replace("Z", "+00:00"))
+            duration = (end_dt - start_dt).total_seconds()
+        except Exception:
+            pass
+
+    messages = await load_messages(session_id)
+    user_turns = [m for m in messages if m.get("speaker") == "user"]
+    assistant_turns = [m for m in messages if m.get("speaker") == "assistant"]
+    turn_count = len(user_turns) + len(assistant_turns)
+
+    user_speaking_time = 0.0
+    agent_speaking_time = 0.0
+    for m in messages:
+        start = m.get("recording_start_ms")
+        end = m.get("recording_end_ms")
+        if start is not None and end is not None and end > start:
+            ms = end - start
+            if m.get("speaker") == "user":
+                user_speaking_time += ms / 1000.0
+            else:
+                agent_speaking_time += ms / 1000.0
+
+    latencies = [m["latency_ms"] for m in messages if m.get("latency_ms") is not None]
+    average_latency = sum(latencies) / len(latencies) if latencies else 0.0
+
+    p95_latency = None
+    if latencies:
+        sorted_latencies = sorted(latencies)
+        p95_index = int(len(sorted_latencies) * 0.95)
+        p95_latency = float(sorted_latencies[min(p95_index, len(sorted_latencies) - 1)])
+
+    stream_status = "unknown"
+    if latencies:
+        max_latency = max(latencies)
+        if len(latencies) > 1:
+            std = statistics.stdev(latencies)
+            cv = std / average_latency if average_latency > 0 else 0.0
+        else:
+            cv = 0.0
+        if average_latency > 5000 or max_latency > 10000:
+            stream_status = "unstable"
+        elif cv > 0.5 or max_latency > 5000:
+            stream_status = "degraded"
+        else:
+            stream_status = "stable"
+
+    sentiments = [m["sentiment"] for m in messages if m.get("sentiment")]
+    sentiment_score = None
+    resolution_status = "unknown"
+    if sentiments:
+        score_map = {"positive": 1.0, "neutral": 0.0, "negative": -0.5, "frustrated": -1.0}
+        scores = [score_map.get(s, 0.0) for s in sentiments]
+        sentiment_score = sum(scores) / len(scores)
+        if sentiment_score >= 0.3:
+            resolution_status = "resolved_positive"
+        elif sentiment_score <= -0.6:
+            resolution_status = "escalation_needed"
+        else:
+            resolution_status = "resolved"
+
+    payload = {"ended_at": ended_at, "duration": duration, "status": "ended"}
+    if recording_url:
+        payload["recording_url"] = recording_url
+    if summary:
+        payload["summary"] = summary
+    try:
+        await run_supabase(lambda: client.table("sessions").update(payload).eq("id", session_id).execute())
+    except Exception:
+        logger.exception("Failed to update session status for session=%s", session_id)
+
+    metrics_payload = {
+        "session_id": session_id,
+        "total_duration": duration,
+        "user_speaking_time": user_speaking_time,
+        "agent_speaking_time": agent_speaking_time,
+        "turn_count": turn_count,
+        "average_latency": average_latency,
+        "p95_latency": p95_latency,
+        "stream_status": stream_status,
+        "sentiment_score": sentiment_score,
+        "resolution_status": resolution_status,
+    }
+    try:
+        await run_supabase(lambda: client.table("call_metrics").upsert(metrics_payload, on_conflict="session_id").execute())
+    except Exception:
+        logger.exception("Failed to upsert call_metrics for session=%s", session_id)

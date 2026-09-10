@@ -4,9 +4,11 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import json as json_module
 import logging
+import asyncio
+from contextlib import suppress
 import pytest
-from unittest.mock import MagicMock, patch, AsyncMock
-from fastapi import WebSocket, WebSocketDisconnect
+from unittest.mock import MagicMock, patch, AsyncMock, ANY
+from fastapi import WebSocket
 from httpx import Response
 from app.websocket.handler import router as ws_router
 
@@ -26,220 +28,162 @@ def _make_pcm_chunk(duration_ms: int = 250) -> bytes:
     return b"\x00\x00" * (samples // 2)
 
 
-def _vad_side_effect(audio_chunk: bytes):
-    frame_count = 0
-    max_frames = int(len(audio_chunk) / int(16000 * 2 * (30 / 1000)))
-
-    def side_effect(frame):
-        nonlocal frame_count
-        frame_count += 1
-        if frame_count >= max_frames:
-            return audio_chunk, True
-        return None, False
-
-    return side_effect
-
-
 def _get_session_logs(session_id: str):
-    from app.websocket.handler import session_logs
+    from app.websocket.manager import session_logs
     return list(session_logs.get(session_id, []))
 
 
-@pytest.mark.asyncio
-async def test_pipeline_audio_to_llm_to_speech():
-    mock_ws = AsyncMock(spec=WebSocket)
-    mock_ws.query_params = {"token": "valid-token"}
+class MockUser:
+    id = "anonymous"
+    email = "anonymous@example.com"
 
-    audio_chunk = _make_pcm_chunk(250)
+
+@pytest.mark.asyncio
+async def test_pipeline_routes_to_v2_when_flag_set():
+    mock_ws = AsyncMock(spec=WebSocket)
 
     with patch("app.websocket.handler.manager") as mock_manager, \
          patch("app.websocket.handler.create_session", new_callable=AsyncMock) as mock_create_session, \
          patch("app.websocket.handler.end_session", new_callable=AsyncMock) as mock_end_session, \
-         patch("app.websocket.handler.get_supabase") as mock_get_supabase, \
-         patch("app.websocket.handler.VADBuffer") as mock_vad_cls, \
-         patch("app.websocket.handler.pcm_to_wav") as mock_convert, \
-         patch("app.websocket.handler.decode_to_pcm") as mock_decode, \
-         patch("app.websocket.handler.transcribe_audio") as mock_stt, \
-         patch("app.websocket.handler.retrieve_context") as mock_rag, \
-         patch("app.websocket.handler.generate_response") as mock_llm, \
-         patch("app.websocket.handler.synthesize_speech") as mock_tts, \
-         patch("app.websocket.handler.save_turn", new_callable=AsyncMock):
-        mock_supabase = MagicMock()
-        mock_supabase.auth.get_user.return_value.user = MagicMock()
-        mock_get_supabase.return_value = mock_supabase
-
-        mock_vad = MagicMock()
-        mock_vad.process = MagicMock(side_effect=_vad_side_effect(audio_chunk))
-        mock_vad_cls.return_value = mock_vad
-
-        mock_decode.return_value = audio_chunk
-        mock_convert.return_value = b"wav-audio"
-        mock_stt.return_value = "What is in the document?"
-        mock_rag.return_value = [{"text": "Context from document: policy is 20 days."}]
-        mock_llm.return_value = "According to the document, the policy is 20 days."
-        mock_tts.return_value = b"tts-audio-bytes"
-
-        mock_create_session.return_value = "db-session-1"
+         patch("app.websocket.handler._get_default_persona_id", new_callable=AsyncMock) as mock_get_default_persona, \
+         patch("app.websocket.handler._load_session", new_callable=AsyncMock) as mock_load_session, \
+         patch("app.websocket.handler._handle_voice_pipeline_v2", new_callable=AsyncMock) as mock_v2_handler, \
+         patch("app.websocket.handler.settings") as mock_settings:
+        mock_get_default_persona.return_value = "default"
+        mock_load_session.return_value = None
+        mock_settings.use_new_pipeline = True
+        mock_create_session.return_value = "session-1"
         mock_manager.connect = AsyncMock()
         mock_manager.disconnect = MagicMock()
         mock_manager.send_json = AsyncMock()
         mock_manager.send_bytes = AsyncMock()
 
         mock_ws.receive = AsyncMock(side_effect=[
-            {"bytes": audio_chunk},
-            WebSocketDisconnect(),
+            {"type": "websocket.disconnect"},
         ])
 
         await ws_router.routes[0].endpoint(mock_ws, "session-1")
 
-    logs = _get_session_logs("session-1")
-    messages = [entry["msg"] for entry in logs]
-    assert any("WS connected" in m for m in messages)
-    assert any("WS status connected" in m for m in messages)
-    assert any("WS audio chunk" in m for m in messages)
-    assert any("WS speech ended" in m for m in messages)
-    assert any("WS STT" in m and "What is in the document?" in m for m in messages)
-    assert any("WS RAG context" in m for m in messages)
-    assert any("WS LLM response" in m and "According to the document" in m for m in messages)
-    assert any("WS TTS" in m for m in messages)
-    assert any("WS response sent" in m for m in messages)
-    assert any("WS disconnected" in m for m in messages)
-
-    mock_convert.assert_called_once()
-    mock_stt.assert_called_once()
-    mock_rag.assert_called_once()
-    mock_llm.assert_called_once()
-    mock_tts.assert_called_once()
-    mock_manager.send_bytes.assert_called_once_with("session-1", b"tts-audio-bytes")
-    mock_manager.send_json.assert_any_call("session-1", {
-        "type": "response_audio",
-        "text": "According to the document, the policy is 20 days.",
-    })
+    mock_v2_handler.assert_called_once_with(mock_ws, "session-1")
 
 
 @pytest.mark.asyncio
-async def test_pipeline_text_transcript_flow():
+async def test_pipeline_audio_message_routed_to_audio_in_queue():
+    from app.orchestration.pipeline import SessionPipelineState
+    from app.orchestration.stages import ws_in_task
+    from app.services.conversation_mgr import ConversationManager
+    from app.services.vad import VADBuffer
+
     mock_ws = AsyncMock(spec=WebSocket)
-    mock_ws.query_params = {"token": "valid-token"}
+    state = SessionPipelineState(
+        session_id="sess-1",
+        db_session_id="db-1",
+        persona_id="p-1",
+        voice_id="v-1",
+        websocket=mock_ws,
+        audio_in_queue=asyncio.Queue(),
+        text_in_queue=asyncio.Queue(),
+        sentence_queue=asyncio.Queue(),
+        audio_out_queue=asyncio.Queue(),
+        control_queue=asyncio.Queue(),
+        ws_event_queue=asyncio.Queue(),
+        conversation_mgr=ConversationManager(),
+        vad=VADBuffer(sample_rate=16000),
+        speech_detected=asyncio.Event(),
+        cancelled_turns=set(),
+    )
 
-    with patch("app.websocket.handler.manager") as mock_manager, \
-         patch("app.websocket.handler.create_session", new_callable=AsyncMock) as mock_create_session, \
-         patch("app.websocket.handler.end_session", new_callable=AsyncMock) as mock_end_session, \
-         patch("app.websocket.handler.get_supabase") as mock_get_supabase, \
-         patch("app.websocket.handler.retrieve_context") as mock_rag, \
-         patch("app.websocket.handler.generate_response") as mock_llm, \
-         patch("app.websocket.handler.synthesize_speech") as mock_tts, \
-         patch("app.websocket.handler.save_turn", new_callable=AsyncMock):
-        mock_supabase = MagicMock()
-        mock_supabase.auth.get_user.return_value.user = MagicMock()
-        mock_get_supabase.return_value = mock_supabase
+    audio_chunk = b"\x00\x00" * 320
+    mock_ws.receive = AsyncMock(side_effect=[
+        {"type": "websocket.receive", "bytes": audio_chunk},
+        {"type": "websocket.disconnect"},
+    ])
 
-        mock_rag.return_value = [{"text": "Document says refunds take 5-7 days."}]
-        mock_llm.return_value = "Refunds take 5-7 business days."
-        mock_tts.return_value = b"tts-audio"
+    task = asyncio.create_task(ws_in_task(state))
+    await asyncio.sleep(0.2)
+    task.cancel()
+    with suppress(asyncio.CancelledError):
+        await task
 
-        mock_create_session.return_value = "db-session-1"
-        mock_manager.connect = AsyncMock()
-        mock_manager.disconnect = MagicMock()
-        mock_manager.send_json = AsyncMock()
-        mock_manager.send_bytes = AsyncMock()
-
-        mock_ws.receive = AsyncMock(side_effect=[
-            {"text": '{"type": "transcript", "text": "When is my refund?"}'},
-            WebSocketDisconnect(),
-        ])
-
-        await ws_router.routes[0].endpoint(mock_ws, "session-1")
-
-    logs = _get_session_logs("session-1")
-    messages = [entry["msg"] for entry in logs]
-    assert any("WS text message session=session-1 type=transcript" in m for m in messages)
-    assert any("WS transcript session=session-1 text=When is my refund?" in m for m in messages)
-    assert any("WS RAG context session=session-1 chunks=1" in m for m in messages)
-    assert any("WS LLM response session=session-1 text=Refunds take 5-7 business days." in m for m in messages)
-    assert any("WS TTS session=session-1 audio_len=9" in m for m in messages)
-    assert any("WS response sent session=session-1" in m for m in messages)
-
-    mock_manager.send_bytes.assert_called_once_with("session-1", b"tts-audio")
-    mock_manager.send_json.assert_any_call("session-1", {
-        "type": "response_audio",
-        "text": "Refunds take 5-7 business days.",
-    })
+    assert state.audio_in_queue.get_nowait() == audio_chunk
 
 
 @pytest.mark.asyncio
-async def test_pipeline_empty_transcript():
+async def test_pipeline_text_message_routed_to_control_queue():
+    from app.orchestration.pipeline import SessionPipelineState
+    from app.orchestration.stages import ws_in_task
+    from app.services.conversation_mgr import ConversationManager
+    from app.services.vad import VADBuffer
+
     mock_ws = AsyncMock(spec=WebSocket)
-    mock_ws.query_params = {"token": "valid-token"}
+    state = SessionPipelineState(
+        session_id="sess-1",
+        db_session_id="db-1",
+        persona_id="p-1",
+        voice_id="v-1",
+        websocket=mock_ws,
+        audio_in_queue=asyncio.Queue(),
+        text_in_queue=asyncio.Queue(),
+        sentence_queue=asyncio.Queue(),
+        audio_out_queue=asyncio.Queue(),
+        control_queue=asyncio.Queue(),
+        ws_event_queue=asyncio.Queue(),
+        conversation_mgr=ConversationManager(),
+        vad=VADBuffer(sample_rate=16000),
+        speech_detected=asyncio.Event(),
+        cancelled_turns=set(),
+    )
 
-    with patch("app.websocket.handler.manager") as mock_manager, \
-         patch("app.websocket.handler.create_session", new_callable=AsyncMock) as mock_create_session, \
-         patch("app.websocket.handler.end_session", new_callable=AsyncMock), \
-         patch("app.websocket.handler.get_supabase") as mock_get_supabase, \
-         patch("app.websocket.handler.VADBuffer") as mock_vad_cls, \
-         patch("app.websocket.handler.pcm_to_wav") as mock_convert, \
-         patch("app.websocket.handler.decode_to_pcm") as mock_decode, \
-         patch("app.websocket.handler.transcribe_audio") as mock_stt, \
-         patch("app.websocket.handler.save_turn", new_callable=AsyncMock):
-        mock_supabase = MagicMock()
-        mock_supabase.auth.get_user.return_value.user = MagicMock()
-        mock_get_supabase.return_value = mock_supabase
+    mock_ws.receive = AsyncMock(side_effect=[
+        {"type": "websocket.receive", "text": '{"type": "transcript", "text": "hello"}'},
+        {"type": "websocket.disconnect"},
+    ])
 
-        mock_vad = MagicMock()
-        mock_vad.process = MagicMock(return_value=(b"audio", True))
-        mock_vad_cls.return_value = mock_vad
+    task = asyncio.create_task(ws_in_task(state))
+    await asyncio.sleep(0.2)
+    task.cancel()
+    with suppress(asyncio.CancelledError):
+        await task
 
-        mock_decode.return_value = _make_pcm_chunk(250)
-        mock_convert.return_value = b"wav-audio"
-        mock_stt.return_value = ""
-
-        mock_create_session.return_value = "db-session-1"
-        mock_manager.connect = AsyncMock()
-        mock_manager.disconnect = MagicMock()
-        mock_manager.send_json = AsyncMock()
-        mock_manager.send_bytes = AsyncMock()
-
-        mock_ws.receive = AsyncMock(side_effect=[
-            {"bytes": _make_pcm_chunk(250)},
-            WebSocketDisconnect(),
-        ])
-
-        await ws_router.routes[0].endpoint(mock_ws, "session-1")
-
-    logs = _get_session_logs("session-1")
-    messages = [entry["msg"] for entry in logs]
-    assert any("WS empty transcript" in m for m in messages)
-    mock_manager.send_json.assert_any_call("session-1", {"type": "error", "message": "empty_transcript"})
+    event = state.control_queue.get_nowait()
+    assert event["type"] == "external_transcript"
+    assert event["data"]["text"] == "hello"
 
 
 @pytest.mark.asyncio
-async def test_pipeline_auth_flow():
+async def test_pipeline_stop_call_routed_to_control_queue():
+    from app.orchestration.pipeline import SessionPipelineState
+    from app.orchestration.stages import ws_in_task
+    from app.services.conversation_mgr import ConversationManager
+    from app.services.vad import VADBuffer
+
     mock_ws = AsyncMock(spec=WebSocket)
-    mock_ws.query_params = {"token": "valid-token"}
+    state = SessionPipelineState(
+        session_id="sess-1",
+        db_session_id="db-1",
+        persona_id="p-1",
+        voice_id="v-1",
+        websocket=mock_ws,
+        audio_in_queue=asyncio.Queue(),
+        text_in_queue=asyncio.Queue(),
+        sentence_queue=asyncio.Queue(),
+        audio_out_queue=asyncio.Queue(),
+        control_queue=asyncio.Queue(),
+        ws_event_queue=asyncio.Queue(),
+        conversation_mgr=ConversationManager(),
+        vad=VADBuffer(sample_rate=16000),
+        speech_detected=asyncio.Event(),
+        cancelled_turns=set(),
+    )
 
-    with patch("app.websocket.handler.manager") as mock_manager, \
-         patch("app.websocket.handler.create_session", new_callable=AsyncMock) as mock_create_session, \
-         patch("app.websocket.handler.end_session", new_callable=AsyncMock) as mock_end_session, \
-         patch("app.websocket.handler.get_supabase") as mock_get_supabase:
-        mock_supabase = MagicMock()
-        mock_supabase.auth.get_user.return_value.user = MagicMock()
-        mock_get_supabase.return_value = mock_supabase
+    mock_ws.receive = AsyncMock(side_effect=[
+        {"type": "websocket.receive", "text": '{"type": "stop_call"}'},
+    ])
 
-        mock_create_session.return_value = "db-session-1"
-        mock_manager.connect = AsyncMock()
-        mock_manager.disconnect = MagicMock()
-        mock_manager.send_json = AsyncMock()
-        mock_manager.send_bytes = AsyncMock()
+    await ws_in_task(state)
 
-        mock_ws.receive = AsyncMock(side_effect=[
-            {"text": '{"type": "auth", "persona_id": "p1", "voice_id": "v1", "user_id": "u1"}'},
-            WebSocketDisconnect(),
-        ])
+    event = state.control_queue.get_nowait()
+    assert event["type"] == "stop_call"
 
-        await ws_router.routes[0].endpoint(mock_ws, "session-1")
 
-    logs = _get_session_logs("session-1")
-    messages = [entry["msg"] for entry in logs]
-    assert any("WS authenticated" in m for m in messages)
-    assert any("WS disconnected" in m for m in messages)
-    mock_create_session.assert_called_once_with("p1", user_id="u1")
+
