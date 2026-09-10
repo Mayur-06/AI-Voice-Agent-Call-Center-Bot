@@ -4,7 +4,12 @@ import json
 import os
 from fastapi import APIRouter, HTTPException, status
 from fastapi.responses import Response, JSONResponse, FileResponse
-from pydub import AudioSegment
+
+try:
+    from pydub import AudioSegment
+except ImportError:  # pragma: no cover - optional dependency for MP3 export
+    AudioSegment = None
+
 from app.models.database import get_supabase, get_supabase_admin
 from app.services.call_summarizer import generate_call_summary
 from typing import List
@@ -79,6 +84,12 @@ async def export_recording(session_id: str, format: str = "wav"):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Recording not found")
 
     if format == "mp3":
+        if AudioSegment is None:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="MP3 export requires pydub to be installed in the backend environment.",
+            )
+
         audio = AudioSegment.from_file(io.BytesIO(wav_bytes), format="wav")
         mp3_buffer = io.BytesIO()
         audio.export(mp3_buffer, format="mp3", bitrate="128k")

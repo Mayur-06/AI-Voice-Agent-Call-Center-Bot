@@ -15,7 +15,7 @@ def _make_frame(value: bool, frame_size: int = 1024) -> bytes:
 
 @pytest.fixture
 def vad_buffer():
-    return VADBuffer(sample_rate=16000, frame_duration_ms=32)
+    return VADBuffer(sample_rate=16000, frame_duration_ms=30)
 
 
 def test_vad_initial_state(vad_buffer):
@@ -43,15 +43,14 @@ def test_vad_reset(vad_buffer):
 
 def test_vad_full_turn_boundary_speech_then_silence(vad_buffer):
     vad_buffer._is_speech = lambda frame: True
-    vad_buffer.frame_duration_ms = 32
-    vad_buffer.threshold = 1.0
+    vad_buffer.frame_duration_ms = 30
 
     import app.services.vad as vad_module
     vad_module.settings.silence_threshold_ms = 128
 
     try:
-        speech_frames = [_make_frame(True) for _ in range(4)]
-        silence_frames = [_make_frame(False) for _ in range(10)]
+        speech_frames = [_make_frame(True, 960) for _ in range(4)]
+        silence_frames = [_make_frame(False, 960) for _ in range(10)]
 
         result = None
         for f in speech_frames:
@@ -64,7 +63,7 @@ def test_vad_full_turn_boundary_speech_then_silence(vad_buffer):
                 break
 
         assert result is not None
-        assert len(result) == 4 * 1024
+        assert len(result) == 4 * 960
         assert triggered is True
         assert onset is not None
         assert end is not None
@@ -74,8 +73,7 @@ def test_vad_full_turn_boundary_speech_then_silence(vad_buffer):
 
 def test_vad_ignores_short_silence(vad_buffer):
     vad_buffer._is_speech = lambda frame: True
-    vad_buffer.frame_duration_ms = 32
-    vad_buffer.threshold = 1.0
+    vad_buffer.frame_duration_ms = 30
 
     import app.services.vad as vad_module
     original_threshold = vad_module.settings.silence_threshold_ms
@@ -131,16 +129,15 @@ def test_vad_flush_empty_returns_none(vad_buffer):
 
 def test_vad_process_bytes_accumulates(vad_buffer):
     vad_buffer._is_speech = lambda frame: True
-    vad_buffer.frame_duration_ms = 32
-    vad_buffer.threshold = 1.0
+    vad_buffer.frame_duration_ms = 30
 
     import app.services.vad as vad_module
     vad_module.settings.silence_threshold_ms = 128
 
     try:
-        data = b"".join([_make_frame(True) for _ in range(4)] + [_make_frame(False) for _ in range(10)])
-        result, triggered, onset, end = vad_buffer.process_bytes(data, frame_size=1024)
+        data = b"".join([_make_frame(True, 960) for _ in range(4)] + [_make_frame(False, 960) for _ in range(10)])
+        result, triggered, onset, end = vad_buffer.process_bytes(data, frame_size=960)
         assert result is not None
-        assert len(result) == 4 * 1024
+        assert len(result) == 4 * 960
     finally:
         vad_module.settings.silence_threshold_ms = 800

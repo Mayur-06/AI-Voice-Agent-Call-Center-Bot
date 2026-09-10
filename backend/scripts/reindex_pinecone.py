@@ -8,7 +8,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 from app.config import settings
 from app.models.database import get_supabase
-from app.services.rag import _get_model, _get_pinecone_index, generate_embeddings
+from app.services.rag import _get_pinecone_index, generate_embeddings
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +35,6 @@ async def reindex_pinecone(supabase, batch_size: int = 100):
         logger.info("Nothing to re-index")
         return
 
-    model = _get_model()
     index = _get_pinecone_index()
 
     total_upserted = 0
@@ -54,7 +53,7 @@ async def reindex_pinecone(supabase, batch_size: int = 100):
             logger.info("Skipping document %s: no chunk text", doc_id)
             continue
 
-        embeddings = model.encode(texts, show_progress_bar=False).tolist()
+        embeddings = generate_embeddings(texts)
 
         vectors = []
         for i, (chunk, embedding) in enumerate(zip(chunks, embeddings)):

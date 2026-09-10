@@ -1,0 +1,21 @@
+# Local virtual environments and build artefacts must never be copied into the
+# Docker build context.  In particular, myvenv currently contains multi-GB ML
+# packages that are installed independently inside the image.
+myvenv/
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Source-control metadata and local secrets are not application artefacts.
+.git/
+.env
+.env.*
+
+# Development-only files.
+tests/
+*.md

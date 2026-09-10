@@ -5,7 +5,7 @@ import uuid
 from typing import Optional
 
 from pinecone import Pinecone
-from sentence_transformers import SentenceTransformer
+from fastembed import TextEmbedding
 from app.config import settings
 from app.models.database import get_supabase
 
@@ -27,10 +27,9 @@ if settings.hf_token:
 def _get_model():
     global _model
     if _model is None:
-        try:
-            _model = SentenceTransformer("all-MiniLM-L6-v2", device=settings.embedding_device)
-        except Exception:
-            _model = SentenceTransformer("all-MiniLM-L6-v2", device="cpu")
+        # FastEmbed runs the ONNX export of the same MiniLM model on CPU.  It
+        # avoids pulling PyTorch and its CUDA-related libraries into production.
+        _model = TextEmbedding(model_name="sentence-transformers/all-MiniLM-L6-v2")
     return _model
 
 
@@ -67,8 +66,7 @@ def split_text(text: str) -> list[str]:
 
 def generate_embeddings(texts: list[str]) -> list[list[float]]:
     model = _get_model()
-    embeddings = model.encode(texts, show_progress_bar=False)
-    return embeddings.tolist()
+    return [embedding.tolist() for embedding in model.embed(texts)]
 
 
 async def _upsert_pinecone(vectors: list[dict], batch_size: int = 100):
@@ -174,7 +172,7 @@ async def index_document(document_id: str, chunks: list[str], filename: str = ""
 
 def _encode_query(query: str) -> list[float]:
     model = _get_model()
-    return model.encode([query], show_progress_bar=False).tolist()[0]
+    return next(model.embed([query])).tolist()
 
 
 def requires_rag(query: str) -> bool:

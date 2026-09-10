@@ -294,10 +294,9 @@ async def embed_node(state: dict) -> dict:
         return {**state, "embeddings": [], "status": "embedded"}
 
     try:
-        from app.services.rag import _get_model
-        model = _get_model()
-        embeddings = await asyncio.to_thread(model.encode, chunks, {"show_progress_bar": False})
-        return {**state, "embeddings": embeddings.tolist(), "status": "embedded"}
+        from app.services.rag import generate_embeddings
+        embeddings = await asyncio.to_thread(generate_embeddings, chunks)
+        return {**state, "embeddings": embeddings, "status": "embedded"}
     except Exception as exc:
         return {**state, "embeddings": [], "error": f"Embedding failed: {exc}", "status": "error"}
 

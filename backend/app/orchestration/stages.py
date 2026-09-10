@@ -78,13 +78,9 @@ async def vad_stt_task(state: SessionPipelineState, audio_executor) -> None:
             pcm = chunk
             state.user_pcm_buffer.extend(pcm)
 
-            vad_frame_ms = 32
+            # WebRTC VAD accepts only 10, 20, or 30 ms PCM frames.
+            vad_frame_ms = 30
             frame_size = int(settings.audio_sample_rate * 2 * (vad_frame_ms / 1000))
-            # Silero VAD requires exactly 512 samples (1024 bytes) for 16kHz
-            if settings.audio_sample_rate == 16000:
-                frame_size = 1024
-            elif settings.audio_sample_rate == 8000:
-                frame_size = 512
             frame_audio, speech_ended, speech_onset, speech_end = await asyncio.get_running_loop().run_in_executor(
                 audio_executor, state.vad.process_bytes, pcm, frame_size
             )

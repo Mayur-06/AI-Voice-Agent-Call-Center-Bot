@@ -1,40 +1,21 @@
 import collections
 import logging
-import os
-import threading
 import time
-import torch
+import webrtcvad
 from app.config import settings
-
-os.environ.setdefault("TORCH_HUB_TRUSTED_REPOSITORIES", "snakers4/silero-vad")
-
-_model = None
-_model_lock = threading.Lock()
 
 logger = logging.getLogger(__name__)
 
 
-def _get_model():
-    global _model
-    if _model is None:
-        with _model_lock:
-            if _model is None:
-                _model, _ = torch.hub.load(
-                    repo_or_dir="snakers4/silero-vad",
-                    model="silero_vad",
-                    force_reload=False,
-                    onnx=False,
-                    trust_repo=True,
-                )
-                _model.eval()
-    return _model
-
-
 class VADBuffer:
-    def __init__(self, sample_rate: int, frame_duration_ms: int = 30, threshold: float | None = None):
+    def __init__(self, sample_rate: int, frame_duration_ms: int = 30):
+        if sample_rate not in (8000, 16000, 32000, 48000):
+            raise ValueError("WebRTC VAD supports 8, 16, 32, or 48 kHz audio")
+        if frame_duration_ms not in (10, 20, 30):
+            raise ValueError("WebRTC VAD requires 10, 20, or 30 ms frames")
         self.sample_rate = sample_rate
         self.frame_duration_ms = frame_duration_ms
-        self.threshold = threshold if threshold is not None else settings.vad_threshold
+        self._vad = webrtcvad.Vad(settings.vad_aggressiveness)
         self.buffer: collections.deque = collections.deque()
         self.triggered = False
         self.speech_frames: collections.deque = collections.deque()
@@ -42,17 +23,10 @@ class VADBuffer:
         self._speech_onset: float | None = None
 
     def _is_speech(self, frame: bytes) -> bool:
-        model = _get_model()
-        audio = torch.frombuffer(bytearray(frame), dtype=torch.int16).float() / 32768.0
-        if audio.dim() == 0:
-            return False
         try:
-            with torch.no_grad():
-                prob = model(audio.unsqueeze(0), self.sample_rate).item()
-            logger.info("Silero VAD prob=%s threshold=%s triggered=%s", round(prob, 3), self.threshold, self.triggered)
-            return prob >= self.threshold
+            return self._vad.is_speech(frame, self.sample_rate)
         except Exception as exc:
-            logger.info("Silero VAD frame error: %s", exc)
+            logger.info("WebRTC VAD frame error: %s", exc)
             return False
 
     def process(self, frame: bytes) -> tuple[bytes | None, bool, float | None, float | None]:

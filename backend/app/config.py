@@ -30,7 +30,7 @@ class Settings(BaseSettings):
     supabase_password: str = ""
 
     audio_sample_rate: int = 16000
-    vad_threshold: float = 0.1
+    vad_aggressiveness: int = 2
     silence_threshold_ms: int = 800
     audio_chunk_ms: int = 250
 
