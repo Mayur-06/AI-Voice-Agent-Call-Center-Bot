@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { API_BASE } from '@/config';
+import { API_BASE, apiFetch } from '@/config';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   BarChart, Bar, Legend, PieChart, Pie, Cell,
@@ -18,7 +18,7 @@ export default function AnalyticsDashboard() {
       setLoading(true);
       setError(null);
       try {
-        const res = await fetch(`${API_BASE}/api/analytics/`);
+        const res = await apiFetch(`${API_BASE}/api/analytics/`);
         if (!res.ok) throw new Error('Failed to load analytics');
         const data = await res.json();
         if (!cancelled) setAnalytics(data);

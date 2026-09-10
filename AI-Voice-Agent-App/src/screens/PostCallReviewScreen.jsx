@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { API_BASE } from '@/config';
+import { API_BASE, apiFetch } from '@/config';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -64,10 +64,10 @@ export default function PostCallReviewScreen() {
       setError(null);
       try {
         const [sessionRes, summaryRes, sentimentRes, metricsRes] = await Promise.all([
-          fetch(`${API_BASE}/api/sessions/${sessionId}`),
-          fetch(`${API_BASE}/api/sessions/${sessionId}/summary`),
-          fetch(`${API_BASE}/api/sessions/${sessionId}/sentiment`),
-          fetch(`${API_BASE}/api/sessions/${sessionId}/metrics`),
+          apiFetch(`${API_BASE}/api/sessions/${sessionId}`),
+          apiFetch(`${API_BASE}/api/sessions/${sessionId}/summary`),
+          apiFetch(`${API_BASE}/api/sessions/${sessionId}/sentiment`),
+          apiFetch(`${API_BASE}/api/sessions/${sessionId}/metrics`),
         ]);
 
         if (!sessionRes.ok) {
@@ -103,7 +103,7 @@ export default function PostCallReviewScreen() {
           if (!cancelled) setMetrics(metricsData);
         }
 
-        const recordingRes = await fetch(`${API_BASE}/api/sessions/${sessionId}/recording`);
+        const recordingRes = await apiFetch(`${API_BASE}/api/sessions/${sessionId}/recording`);
         if (recordingRes.ok) {
           const blob = await recordingRes.blob();
           if (!cancelled) {
@@ -151,7 +151,7 @@ export default function PostCallReviewScreen() {
 
     async function poll() {
       try {
-        const res = await fetch(`${API_BASE}/api/sessions/${sessionId}`);
+        const res = await apiFetch(`${API_BASE}/api/sessions/${sessionId}`);
         if (!res.ok) return;
         const data = await res.json();
         if (cancelled) return;
@@ -161,9 +161,9 @@ export default function PostCallReviewScreen() {
           setWaitingForEnd(false);
 
           const [summaryRes, sentimentRes, metricsRes] = await Promise.all([
-            fetch(`${API_BASE}/api/sessions/${sessionId}/summary`),
-            fetch(`${API_BASE}/api/sessions/${sessionId}/sentiment`),
-            fetch(`${API_BASE}/api/sessions/${sessionId}/metrics`),
+            apiFetch(`${API_BASE}/api/sessions/${sessionId}/summary`),
+            apiFetch(`${API_BASE}/api/sessions/${sessionId}/sentiment`),
+            apiFetch(`${API_BASE}/api/sessions/${sessionId}/metrics`),
           ]);
 
           if (summaryRes.ok) {
@@ -187,7 +187,7 @@ export default function PostCallReviewScreen() {
             setMetrics(metricsData);
           }
 
-          const recordingRes = await fetch(`${API_BASE}/api/sessions/${sessionId}/recording`);
+          const recordingRes = await apiFetch(`${API_BASE}/api/sessions/${sessionId}/recording`);
           if (recordingRes.ok) {
             const blob = await recordingRes.blob();
             const url = URL.createObjectURL(blob);
@@ -243,7 +243,7 @@ export default function PostCallReviewScreen() {
   };
 
   const triggerDownload = async (url, fallbackFilename) => {
-    const response = await fetch(url);
+    const response = await apiFetch(url);
     if (!response.ok) {
       throw new Error('Export request failed');
     }
@@ -304,7 +304,7 @@ export default function PostCallReviewScreen() {
 
   const handleCopyJson = async () => {
     try {
-      const res = await fetch(`${API_BASE}/api/sessions/${sessionId}/transcript`);
+      const res = await apiFetch(`${API_BASE}/api/sessions/${sessionId}/transcript`);
       if (!res.ok) {
         setExportError('Failed to copy transcript');
         return;

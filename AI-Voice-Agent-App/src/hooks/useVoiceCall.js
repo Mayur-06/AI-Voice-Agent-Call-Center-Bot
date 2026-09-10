@@ -1,5 +1,6 @@
 import { useEffect, useRef, useCallback } from 'react';
 import { WS_URL, AUDIO_CHUNK_INTERVAL_MS, API_BASE } from '@/store/callStore';
+import { apiFetch } from '@/config';
 import useCallStore from '@/store/callStore';
 
 const TARGET_SAMPLE_RATE = 16000;
@@ -501,7 +502,7 @@ export function useVoiceCall() {
       }
 
       try {
-        const response = await fetch(`${API_BASE}/api/sessions`, {
+        const response = await apiFetch(`${API_BASE}/api/sessions`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',

@@ -4,7 +4,7 @@ import { useVoiceCall } from '@/hooks/useVoiceCall';
 import useCallStore from '@/store/callStore';
 import { useSessionStore } from '@/store/session';
 import { Button } from '@/components/ui/button';
-import { API_BASE } from '@/config';
+import { API_BASE, apiFetch } from '@/config';
 
 const PERSONAS = [
   {
@@ -183,7 +183,7 @@ export default function SessionScreen() {
     let cancelled = false;
     const loadSessions = async () => {
       try {
-        const res = await fetch(`${API_BASE}/api/sessions`);
+        const res = await apiFetch(`${API_BASE}/api/sessions`);
         if (!cancelled && res.ok) {
           const data = await res.json();
           setPastSessions(Array.isArray(data) ? data.slice(0, 20) : []);
@@ -208,7 +208,7 @@ export default function SessionScreen() {
     let cancelled = false;
     const loadVoices = async () => {
       try {
-        const res = await fetch(`${API_BASE}/api/voices`);
+        const res = await apiFetch(`${API_BASE}/api/voices`);
         if (!cancelled && res.ok) {
           const data = await res.json();
           setVoices(data || []);
@@ -245,7 +245,7 @@ export default function SessionScreen() {
     try {
       const url = new URL(`${API_BASE}/api/documents/upload`);
       url.searchParams.set('persona_id', selectedPersona);
-      const res = await fetch(url.toString(), {
+      const res = await apiFetch(url.toString(), {
         method: 'POST',
         body: formData,
       });
@@ -319,7 +319,7 @@ export default function SessionScreen() {
     if (!selectedPersona) return;
     setIsStarting(true);
     try {
-      const response = await fetch(`${API_BASE}/api/sessions`, {
+      const response = await apiFetch(`${API_BASE}/api/sessions`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
