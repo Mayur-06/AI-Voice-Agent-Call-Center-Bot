@@ -61,6 +61,12 @@ export function useVoiceCall() {
   const mutedRef = useRef(muted);
   const analyserRef = useRef(null);
   const connectWebSocketRef = useRef(null);
+  const playbackIdleTimerRef = useRef(null);
+  const lastPlaybackSentRef = useRef(null);
+  // Serialises decodeAudioData so chunks are scheduled in the order they
+  // arrived, not the order the decoder happened to finish them.
+  const decodeChainRef = useRef(Promise.resolve());
+  const playbackGenerationRef = useRef(0);
 
   useEffect(() => {
     mutedRef.current = muted;
@@ -68,6 +74,35 @@ export function useVoiceCall() {
       workletNodeRef.current.port.postMessage({ muted });
     }
   }, [muted]);
+
+  // Debounced so a brief dip between arriving chunks is not reported as the
+  // end of playback.
+  const reportPlaybackState = useCallback((isPlaying) => {
+    const send = (playing) => {
+      const ws = wsRef.current;
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      if (lastPlaybackSentRef.current === playing) return;
+      lastPlaybackSentRef.current = playing;
+      try {
+        ws.send(JSON.stringify({ type: 'playback_state', playing }));
+      } catch {
+        // Socket going away; the server's time-based backstop covers this.
+      }
+    };
+
+    if (playbackIdleTimerRef.current) {
+      clearTimeout(playbackIdleTimerRef.current);
+      playbackIdleTimerRef.current = null;
+    }
+    if (isPlaying) {
+      send(true);
+      return;
+    }
+    playbackIdleTimerRef.current = setTimeout(() => {
+      playbackIdleTimerRef.current = null;
+      if (!(playerRef.current && playerRef.current.isPlaying)) send(false);
+    }, 250);
+  }, []);
 
   const ensurePlaybackContext = useCallback(() => {
     let ctx = ttsCtxRef.current;
@@ -90,13 +125,20 @@ export function useVoiceCall() {
           // UI state follows actual playback rather than server events, which
           // used to flip to idle while audio was still draining.
           setStatus(isPlaying ? 'speaking' : 'idle');
+          // Tell the server too. It streams a 13s reply in about 2s, so
+          // without this it unmutes the microphone while the agent is still
+          // audible - the mic then hears the agent and answers it.
+          reportPlaybackState(isPlaying);
         },
       });
     }
     return ctx;
-  }, [setAudioContext, setStatus]);
+  }, [setAudioContext, setStatus, reportPlaybackState]);
 
   const stopTtsPlayback = useCallback(() => {
+    // Bump the generation so buffers still being decoded are discarded rather
+    // than scheduled on top of whatever plays next.
+    playbackGenerationRef.current += 1;
     if (playerRef.current) playerRef.current.stop();
   }, []);
 
@@ -182,15 +224,27 @@ export function useVoiceCall() {
   const handleServerResponseAudio = useCallback((data) => {
     const ctx = ensurePlaybackContext();
     if (!ctx) return;
-    ctx.decodeAudioData(
-      data.slice(0),
-      (buffer) => {
+
+    // decodeAudioData is asynchronous and gives NO ordering guarantee: with
+    // ~115 chunks in flight, roughly one in ten finished out of order, and the
+    // player scheduled them in completion order rather than wire order. Chunk
+    // 11 played before chunk 10, 14 before 13 - which is heard as the voice
+    // breaking up and doubling back on itself. (The saved recording was always
+    // fine because the server composes that from PCM in the correct order.)
+    //
+    // Chaining the decodes restores wire order. Decoding ~120ms of audio takes
+    // well under a millisecond, so serialising costs no measurable latency.
+    const generation = playbackGenerationRef.current;
+    decodeChainRef.current = decodeChainRef.current
+      .then(() => ctx.decodeAudioData(data.slice(0)))
+      .then((buffer) => {
+        // Dropped if barge-in reset playback while this was decoding.
+        if (generation !== playbackGenerationRef.current) return;
         if (playerRef.current) playerRef.current.schedule(buffer);
-      },
-      (err) => {
+      })
+      .catch((err) => {
         console.error('[voice] decodeAudioData failed', err);
-      },
-    );
+      });
   }, [ensurePlaybackContext]);
 
   const handleServerError = useCallback((msg) => {

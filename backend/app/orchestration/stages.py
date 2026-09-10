@@ -6,7 +6,7 @@ import uuid
 from contextlib import suppress
 
 from app.config import settings
-from app.services.stt import transcribe_audio, is_noisy_transcription
+from app.services.stt import transcribe_audio, is_noisy_transcription, is_hallucinated_silence
 from app.services.audio_processor import pcm_to_wav, strip_wav_header
 from app.services.rag import requires_rag, retrieve_relevant_chunks
 from app.services.llm import generate_response_stream
@@ -103,6 +103,10 @@ async def ws_in_task(state: SessionPipelineState) -> None:
             safe_put_nowait(state.control_queue, {"type": "external_transcript", "data": data})
         elif msg_type == "voice_select":
             safe_put_nowait(state.control_queue, {"type": "voice_select", "data": data})
+        elif msg_type == "playback_state":
+            # The browser is the only thing that knows when its speakers go
+            # quiet; the server finishes sending long before playback ends.
+            safe_put_nowait(state.control_queue, {"type": "playback_state", "data": data})
 
 
 # --- vad + stt ---------------------------------------------------------------
@@ -156,7 +160,7 @@ async def vad_stt_task(state: SessionPipelineState, audio_executor) -> None:
             stt_task = asyncio.create_task(_transcribe(frame_audio, audio_executor))
             safe_put_nowait(
                 state.stt_pending_queue,
-                (stt_task, recording_start_ms, recording_end_ms),
+                (stt_task, recording_start_ms, recording_end_ms, state.vad.last_voiced_ms),
             )
         except asyncio.CancelledError:
             raise
@@ -186,7 +190,7 @@ async def stt_collect_task(state: SessionPipelineState) -> None:
         item = await state.stt_pending_queue.get()
         if item is None:
             break
-        stt_task, recording_start_ms, recording_end_ms = item
+        stt_task, recording_start_ms, recording_end_ms, voiced_ms = item
         try:
             user_text, stt_latency_ms = await stt_task
         except asyncio.CancelledError:
@@ -204,7 +208,15 @@ async def stt_collect_task(state: SessionPipelineState) -> None:
 
         logger.info("STT_RESULT session=%s text=%r latency_ms=%s", state.session_id, user_text, stt_latency_ms)
 
-        if not user_text or is_noisy_transcription(user_text):
+        if (
+            not user_text
+            or is_noisy_transcription(user_text)
+            or is_hallucinated_silence(user_text, voiced_ms)
+        ):
+            logger.info(
+                "STT_DISCARDED session=%s text=%r voiced_ms=%s",
+                state.session_id, user_text, voiced_ms,
+            )
             safe_put_nowait(
                 state.ws_event_queue,
                 make_event(state, "error", message="empty_transcript", stt_latency_ms=stt_latency_ms),
@@ -237,6 +249,12 @@ async def rag_llm_task(state: SessionPipelineState, embedding_executor) -> None:
             if msg is None:
                 break
 
+            # A turn is only finished when its audio has been sent, not when
+            # the LLM stops streaming. Starting the next turn at LLM
+            # completion left the previous turn's audio still draining to the
+            # browser, so the caller heard two replies talking over each other.
+            await _await_playback_finished(state)
+
             turn_id = str(uuid.uuid4())
             state.current_turn_id = turn_id
 
@@ -252,6 +270,37 @@ async def rag_llm_task(state: SessionPipelineState, embedding_executor) -> None:
             await _guarded(state, "rag_llm", _body)
         finally:
             state.text_in_queue.task_done()
+
+
+async def _await_speakers_quiet(state: SessionPipelineState, turn_id: str) -> None:
+    """Block until the caller's speakers have actually gone quiet.
+
+    Prefers the browser's own report; falls back to the projected end of the
+    audio already sent, so a lost or missing message cannot hang the turn.
+    """
+    hard_stop = time.perf_counter() + 120
+    while True:
+        if state.current_turn_id != turn_id:
+            return                      # barge-in or a newer turn took over
+        if state.playback_finished.is_set():
+            return                      # browser says it has finished
+        now = time.perf_counter()
+        if now >= hard_stop:
+            logger.warning("PLAYBACK_HARD_STOP session=%s", state.session_id)
+            return
+        remaining = state.audio_playback_deadline - now
+        if remaining <= 0 and state.audio_out_queue.empty():
+            return                      # everything sent has had time to play
+        await asyncio.sleep(min(0.05, max(0.01, remaining)) if remaining > 0 else 0.02)
+
+
+async def _await_playback_finished(state: SessionPipelineState, timeout: float = 60.0) -> None:
+    """Block until the agent has finished speaking the previous turn."""
+    deadline = time.perf_counter() + timeout
+    while state.is_speaking and time.perf_counter() < deadline:
+        await asyncio.sleep(0.02)
+    if state.is_speaking:
+        logger.warning("PLAYBACK_WAIT_EXPIRED session=%s", state.session_id)
 
 
 async def _persist_user_turn(state: SessionPipelineState, msg: TextInMessage) -> str | None:
@@ -302,6 +351,13 @@ async def _run_llm_turn(
     logger.info("TURN_STARTED session=%s turn_id=%s", state.session_id, turn_id)
     state.turn_started_at = time.perf_counter()
     state.is_speaking = True
+    state.playback_finished.clear()
+    state.audio_playback_deadline = 0.0
+    # Stop the VAD building an utterance out of the agent's own audio coming
+    # back through the caller's microphone. The client still detects genuine
+    # barge-in by energy and sends stop_playback, which unmutes below.
+    if state.vad is not None:
+        state.vad.muted = True
     safe_put_nowait(state.ws_event_queue, make_event(state, "status", message="thinking"))
 
     # Persistence and sentiment run alongside the LLM, not before it.
@@ -364,6 +420,8 @@ async def _run_llm_turn(
     except Exception as exc:
         logger.exception("LLM_FAILED session=%s turn_id=%s", state.session_id, turn_id)
         state.is_speaking = False
+        if state.vad is not None:
+            state.vad.muted = False
         safe_put_nowait(
             state.ws_event_queue,
             make_event(state, "error", message=f"llm_failed:{type(exc).__name__}"),
@@ -453,12 +511,10 @@ async def _finish_turn(state: SessionPipelineState, msg: TurnComplete) -> None:
     # the socket. Clearing it here made the supervisor ignore barge-in for the
     # whole tail of the reply, so the user could not interrupt the last
     # sentences the agent was still speaking.
-    drain_deadline = time.perf_counter() + 30
-    while not state.audio_out_queue.empty():
-        await asyncio.sleep(0.02)
-        if state.current_turn_id != msg.turn_id or time.perf_counter() > drain_deadline:
-            break
+    await _await_speakers_quiet(state, msg.turn_id)
     state.is_speaking = False
+    if state.vad is not None:
+        state.vad.muted = False
     ai_recording_end_ms = (
         int((time.perf_counter() - state.call_start_time) * 1000)
         if state.call_start_time is not None
@@ -544,7 +600,13 @@ async def _synthesize_sentence(
                         state.session_id,
                         int((time.perf_counter() - state.call_start_time) * 1000),
                     )
-            manager.append_ai_audio(state.session_id, strip_wav_header(bytes(chunk)))
+            pcm = strip_wav_header(bytes(chunk))
+            manager.append_ai_audio(state.session_id, pcm)
+            # Extend the projected end of playback by this chunk's duration.
+            duration = len(pcm) / (settings.audio_sample_rate * 2)
+            state.audio_playback_deadline = (
+                max(time.perf_counter(), state.audio_playback_deadline) + duration
+            )
             safe_put_nowait(state.audio_out_queue, bytes(chunk))
     except asyncio.CancelledError:
         raise
@@ -630,6 +692,8 @@ async def _cancel_current_turn(state: SessionPipelineState) -> None:
         )
 
     state.is_speaking = False
+    if state.vad is not None:
+        state.vad.muted = False
     safe_put_nowait(state.ws_event_queue, make_event(state, "turn_ended", reason="interrupted"))
     safe_put_nowait(state.ws_event_queue, make_event(state, "status", message="interrupted"))
     logger.info("BARGE_IN session=%s", state.session_id)

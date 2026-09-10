@@ -1,6 +1,8 @@
 import collections
 import logging
 import time
+
+import numpy as np
 import webrtcvad
 from app.config import settings
 
@@ -9,6 +11,26 @@ logger = logging.getLogger(__name__)
 # Frames of audio kept before speech is detected, so that soft consonants at
 # the start of a word ("fifty", "seven") are not clipped off.
 PRE_ROLL_MS = 300
+
+# An utterance must contain at least this much *voiced* audio to be worth
+# transcribing. Without a floor a single 30ms frame of room tone, a keypress or
+# a breath started a whole turn: the clip handed to Whisper was then almost
+# entirely silence, and Whisper answers silence with confident hallucinations
+# ("Thank you.", "So", "Okay.") which the agent then replied to.
+MIN_SPEECH_MS = 250
+
+# Minimum RMS of the voiced frames for an utterance to be believed.
+#
+# WebRTC's VAD is a speech/non-speech classifier, not a loudness gate: at
+# aggressiveness 2 it happily labels room tone as speech. Whisper cannot rescue
+# us either - handed pure digital silence it returns "Thank you." with
+# no_speech_prob 0.000 and exactly the same avg_logprob as real speech, so its
+# confidence carries no signal at all.
+#
+# Raw energy does separate them. Measured: silence 0, quiet room tone 79, loud
+# room noise 400, speech 2227. 500 sits well clear of noise and well under even
+# quiet speech.
+MIN_SPEECH_RMS = 500
 
 
 class VADBuffer:
@@ -38,6 +60,26 @@ class VADBuffer:
         # barge-in the moment the user starts speaking rather than waiting for
         # them to finish.
         self.onset_pending = False
+        # Set while the agent's own audio is playing.
+        self.muted = False
+        # Voiced milliseconds behind the utterance most recently emitted, so
+        # downstream can judge how much to trust a short transcript.
+        self.last_voiced_ms = 0
+        self.last_voiced_rms = 0.0
+
+    def _voiced_rms(self) -> float:
+        """Loudness of the voiced frames only.
+
+        Measured across the whole buffer this would be dragged down by the
+        trailing silence that ends every utterance.
+        """
+        if not self.speech_frames:
+            return 0.0
+        joined = b"".join(self.speech_frames)
+        samples = np.frombuffer(joined[: len(joined) - (len(joined) % 2)], dtype="<i2")
+        if samples.size == 0:
+            return 0.0
+        return float(np.sqrt(np.mean(samples.astype(np.float64) ** 2)))
 
     def _is_speech(self, frame: bytes) -> bool:
         try:
@@ -49,6 +91,11 @@ class VADBuffer:
     def process(self, frame: bytes) -> tuple[bytes | None, bool, float | None, float | None]:
         self.just_triggered = False
         if len(frame) % 2 != 0:
+            return None, False, None, None
+        if self.muted and not self.triggered:
+            # Agent is speaking: keep the pre-roll warm so the first syllable of
+            # a genuine interruption survives, but do not trigger on echo.
+            self._pre_roll.append(frame)
             return None, False, None, None
         is_speech = self._is_speech(frame)
         now = time.perf_counter()
@@ -80,10 +127,22 @@ class VADBuffer:
 
         self._trailing_silence_ms += self.frame_duration_ms
         if self._trailing_silence_ms >= settings.silence_threshold_ms:
+            voiced_ms = len(self.speech_frames) * self.frame_duration_ms
+            voiced_rms = self._voiced_rms()
             audio = b"".join(self.buffer)
             speech_end = now
             speech_onset = self._speech_onset
             self.reset()
+            self.last_voiced_ms = voiced_ms
+            self.last_voiced_rms = voiced_rms
+            if voiced_rms < MIN_SPEECH_RMS:
+                logger.debug("VAD discarded utterance: rms %.0f below %s",
+                             voiced_rms, MIN_SPEECH_RMS)
+                return None, False, None, None
+            if voiced_ms < MIN_SPEECH_MS:
+                logger.debug("VAD discarded %sms utterance (%sms voiced)",
+                             len(audio) // (self.sample_rate * 2 // 1000), voiced_ms)
+                return None, False, None, None
             return audio, True, speech_onset, speech_end
         return None, False, self._speech_onset, None
 

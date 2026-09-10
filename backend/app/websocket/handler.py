@@ -198,6 +198,15 @@ async def _handle_voice_pipeline_v2(websocket: WebSocket, session_id: str) -> No
                 data = event["data"]
                 state.voice_id = data.get("voice_id") or state.voice_id
                 safe_put_nowait(state.ws_event_queue, make_event(state, "status", message=f"voice_selected:{state.voice_id}"))
+            elif event.get("type") == "playback_state":
+                playing = bool((event.get("data") or {}).get("playing"))
+                if playing:
+                    state.playback_finished.clear()
+                    if state.vad is not None:
+                        state.vad.muted = True
+                else:
+                    state.playback_finished.set()
+                logger.info("PLAYBACK_STATE session=%s playing=%s", state.session_id, playing)
             elif event.get("type") == "cancel_turn":
                 await pipeline.handle_barge_in(state)
             elif event.get("type") == "force_stt":
@@ -217,7 +226,9 @@ async def _handle_voice_pipeline_v2(websocket: WebSocket, session_id: str) -> No
                 from app.orchestration.stages import _transcribe
                 stt_task = asyncio.create_task(_transcribe(audio_data, pipeline.audio_executor))
                 state.user_pcm_buffer.clear()
-                safe_put_nowait(state.stt_pending_queue, (stt_task, None, None))
+                # voiced_ms None: an explicit "stop listening" is a deliberate
+                # request to transcribe, so short stock phrases are trusted.
+                safe_put_nowait(state.stt_pending_queue, (stt_task, None, None, None))
             elif event.get("type") == "external_transcript":
                 data = event["data"] or {}
                 nested = data.get("data") if isinstance(data.get("data"), dict) else {}

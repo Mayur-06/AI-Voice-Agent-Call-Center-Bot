@@ -43,6 +43,43 @@ async def transcribe_audio(audio_bytes: bytes, language: str = "en") -> str:
     return result.get("text", "")
 
 
+# Whisper answers silence with a small, very consistent set of stock phrases.
+# In one call where the user said nothing these appeared 20+ times and the
+# agent replied to every one of them.
+#
+# Several are also things a caller genuinely says ("thank you", "okay",
+# "hello"), so the phrase alone is not enough to reject on - it is only
+# treated as a hallucination when the clip contained too little voiced audio
+# to plausibly carry it. See VOICED_MS_FOR_STOCK_PHRASE.
+_WHISPER_STOCK_PHRASES = {
+    "thank you", "thanks", "thank you very much", "thanks for watching",
+    "thank you for watching", "please subscribe", "subscribe", "the end",
+    "music", "applause", "silence", "you", "uh", "um", "hmm", "mm",
+    "so", "oh", "okay", "ok", "yeah", "bye", "bye bye", "goodbye",
+    "i'm sorry", "sorry", "i'm going to go", "you're welcome", "hello",
+}
+
+# A stock phrase needs at least this much voiced audio behind it to be
+# believed. The VAD's energy gate (MIN_SPEECH_RMS) now stops silence and room
+# tone reaching the transcriber at all, so this filter no longer carries that
+# job alone and can afford to be generous - low enough that a caller who
+# genuinely just says "Thank you." is still heard.
+VOICED_MS_FOR_STOCK_PHRASE = 350
+
+
+def is_hallucinated_silence(text: str, voiced_ms: int | None = None) -> bool:
+    """True if this looks like Whisper inventing words from silence."""
+    cleaned = " ".join(text.strip().strip(".,!?-—– ").lower().split())
+    if not cleaned:
+        return True
+    if cleaned not in _WHISPER_STOCK_PHRASES:
+        return False
+    # Unknown duration: give the caller the benefit of the doubt.
+    if voiced_ms is None:
+        return False
+    return voiced_ms < VOICED_MS_FOR_STOCK_PHRASE
+
+
 def is_noisy_transcription(text: str) -> bool:
     """Reject transcripts that are almost certainly noise.
 

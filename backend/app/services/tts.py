@@ -25,6 +25,14 @@ _SILENCE_LEVEL = 300           # int16 amplitude treated as silence
 _ONSET_PAD_MS = 30             # keep a little before speech starts
 _GAP_KEEP_MS = 90              # natural pause left at the end of a sentence
 
+# Smallest block handed to the browser. Trimming splits chunks at the last
+# voiced sample, which can leave fragments only a few samples long. Each one
+# became its own WAV and its own scheduled buffer, and anything shorter than
+# the player's scheduling lead forced it to restart its timeline - which is
+# what made the voice sound chopped up. Blocks are coalesced to this size so
+# playback gets a steady stream instead of hundreds of slivers.
+_MIN_EMIT_MS = 120
+
 
 def _first_voiced_index(pcm: bytes) -> int | None:
     samples = np.frombuffer(pcm[: len(pcm) - (len(pcm) % 2)], dtype="<i2")
@@ -172,8 +180,21 @@ async def synthesize_speech_stream(text: str, voice_id: str):
                 raise RuntimeError(f"Edge TTS decode failed: {item}") from item
             yield item
 
+    min_emit = int(_MIN_EMIT_MS / 1000 * sample_rate * 2) & ~1
+
+    async def _coalesced(chunks):
+        """Merge trimmed output into blocks the player can schedule cleanly."""
+        pending = bytearray()
+        async for block in chunks:
+            pending.extend(block)
+            if len(pending) >= min_emit:
+                yield bytes(pending)
+                pending.clear()
+        if pending:
+            yield bytes(pending)
+
     try:
-        async for trimmed in _trim_silence(_raw_pcm(), sample_rate):
+        async for trimmed in _coalesced(_trim_silence(_raw_pcm(), sample_rate)):
             yield pcm_to_wav(trimmed, sample_rate=sample_rate)
     finally:
         # On barge-in this generator is closed early: unblock both workers.

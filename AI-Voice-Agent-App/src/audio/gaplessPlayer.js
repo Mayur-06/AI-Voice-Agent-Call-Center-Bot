@@ -9,9 +9,15 @@
 // Instead each chunk is scheduled against a running timeline on the audio
 // clock, so consecutive buffers are sample-accurate.
 
-// How far ahead of `currentTime` the first chunk is scheduled. Absorbs jitter
-// without being perceptible.
-const SCHEDULE_LEAD_S = 0.04;
+// Playout buffer: how far ahead of `currentTime` the first chunk is scheduled.
+//
+// This is the entire jitter budget. When a chunk arrives after the scheduled
+// timeline has already passed, the next buffer can only start at `now`, and
+// the silence in between is audible as a chopped-up voice. 40ms was too thin
+// to cover the gap between one sentence finishing and the next being
+// synthesised; 160ms is still well under the ~1.2s time-to-first-audio and
+// makes starvation rare.
+const SCHEDULE_LEAD_S = 0.16;
 
 export function createGaplessPlayer(ctx, { onStateChange } = {}) {
   let nextStartTime = 0;
@@ -28,6 +34,9 @@ export function createGaplessPlayer(ctx, { onStateChange } = {}) {
     },
 
     schedule(audioBuffer) {
+      // Defensive: a zero-length buffer advances nothing but still churns the
+      // timeline and the pending count.
+      if (!audioBuffer || audioBuffer.duration <= 0) return null;
       const now = ctx.currentTime;
       // If the queue has drained, restart the timeline from now.
       const startAt = Math.max(now + SCHEDULE_LEAD_S, nextStartTime);

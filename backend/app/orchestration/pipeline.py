@@ -120,6 +120,17 @@ class SessionPipelineState:
 
     user_pcm_buffer: bytearray = field(default_factory=bytearray)
 
+    # A turn is not over when the server stops sending audio - it is over when
+    # the caller's speakers go quiet. The server pushes a 13s reply in ~2s, so
+    # keying off the send left the microphone live for ~11s while the agent was
+    # still audible: the mic heard the agent, and the next turn started on top
+    # of the one still playing.
+    #
+    # playback_finished is set by the browser; audio_playback_deadline is the
+    # time-based backstop for when that message is late or lost.
+    playback_finished: asyncio.Event = field(default_factory=asyncio.Event)
+    audio_playback_deadline: float = 0.0
+
 
 class FiveQueuePipeline:
     def __init__(self, audio_executor, vad_executor, embedding_executor):
