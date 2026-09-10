@@ -10,20 +10,30 @@ from app.config import settings
 from app.database import Base
 
 
-_sync_client = create_client(settings.supabase_url, settings.supabase_anon_key)
-_sync_admin_client = create_client(settings.supabase_url, settings.supabase_service_role_key)
+# Built lazily: constructing Supabase clients at import time meant any import
+# of this module required live credentials, which broke test collection.
+_sync_client: Client | None = None
+_sync_admin_client: Client | None = None
 
 
 def get_supabase() -> Client:
+    global _sync_client
+    if _sync_client is None:
+        _sync_client = create_client(settings.supabase_url, settings.supabase_anon_key)
     return _sync_client
 
 
 def get_supabase_admin() -> Client:
+    global _sync_admin_client
+    if _sync_admin_client is None:
+        _sync_admin_client = create_client(
+            settings.supabase_url, settings.supabase_service_role_key
+        )
     return _sync_admin_client
 
 
 def get_storage_admin():
-    return _sync_admin_client.storage
+    return get_supabase_admin().storage
 
 
 async def run_supabase(query_builder):

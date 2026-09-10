@@ -1,10 +1,19 @@
+import asyncio
+import contextlib
 import io
 import logging
+import queue
 import re
 
 from edge_tts import Communicate
+from app.config import settings
 from app.models.database import get_supabase, run_supabase
-from app.services.audio_processor import convert_to_wav
+from app.services.audio_processor import (
+    QueueReader,
+    convert_to_wav,
+    iter_pcm_from_stream,
+    pcm_to_wav,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -53,14 +62,56 @@ async def synthesize_speech(text: str, voice_id: str) -> bytes:
 
 
 async def synthesize_speech_stream(text: str, voice_id: str):
+    """Yield playable audio as it is synthesised.
+
+    Previously this buffered the entire sentence, decoded it, and yielded once
+    - so time-to-first-audio was the cost of synthesising the whole sentence.
+    Now MP3 chunks are decoded progressively and emitted as small self-
+    contained WAVs, which keeps the existing browser decode path unchanged.
+    """
+    sample_rate = settings.audio_sample_rate
     communicate = Communicate(text=text, voice=voice_id)
-    audio_buffer = io.BytesIO()
-    async for chunk in _stream_audio_chunks(communicate):
-        audio_buffer.write(chunk)
-    mp3_bytes = audio_buffer.getvalue()
-    # Convert complete MP3 to WAV for reliable browser decoding
-    wav_bytes = convert_to_wav(mp3_bytes)
-    yield wav_bytes
+    loop = asyncio.get_running_loop()
+    mp3_queue: "queue.Queue[bytes | None]" = queue.Queue(maxsize=128)
+    pcm_queue: asyncio.Queue = asyncio.Queue()
+
+    def _decode_worker() -> None:
+        try:
+            for pcm in iter_pcm_from_stream(QueueReader(mp3_queue), sample_rate=sample_rate):
+                loop.call_soon_threadsafe(pcm_queue.put_nowait, pcm)
+        except BaseException as exc:  # surfaced to the caller below
+            loop.call_soon_threadsafe(pcm_queue.put_nowait, exc)
+        finally:
+            loop.call_soon_threadsafe(pcm_queue.put_nowait, None)
+
+    async def _feed_mp3() -> None:
+        try:
+            async for chunk in _stream_audio_chunks(communicate):
+                if chunk:
+                    await asyncio.to_thread(mp3_queue.put, chunk)
+        finally:
+            await asyncio.to_thread(mp3_queue.put, None)
+
+    decoder = loop.run_in_executor(None, _decode_worker)
+    feeder = asyncio.create_task(_feed_mp3())
+    try:
+        while True:
+            item = await pcm_queue.get()
+            if item is None:
+                break
+            if isinstance(item, BaseException):
+                raise RuntimeError(f"Edge TTS decode failed: {item}") from item
+            yield pcm_to_wav(item, sample_rate=sample_rate)
+    finally:
+        # On barge-in this generator is closed early: unblock both workers.
+        if not feeder.done():
+            feeder.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await feeder
+        with contextlib.suppress(Exception):
+            mp3_queue.put_nowait(None)
+        with contextlib.suppress(Exception):
+            await decoder
 
 
 async def _stream_audio_chunks(communicate):

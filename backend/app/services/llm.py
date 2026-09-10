@@ -5,7 +5,16 @@ from google.genai import types
 from app.config import settings
 from app.models.database import get_supabase, run_supabase
 
-_client = genai.Client(api_key=settings.google_api_key)
+# Built lazily and shared process-wide. Constructing this at import time
+# required a live API key just to import the module.
+_client: genai.Client | None = None
+
+
+def get_genai_client() -> genai.Client:
+    global _client
+    if _client is None:
+        _client = genai.Client(api_key=settings.google_api_key)
+    return _client
 
 
 def _build_context_prompt(system_prompt: str, context_chunks: list[tuple[str, str]]) -> str:
@@ -45,7 +54,7 @@ async def generate_response(messages: list[dict[str, str]], system_prompt: str, 
         role = "user" if msg["role"] == "user" else "model"
         contents.append(types.Content(role=role, parts=[types.Part(text=msg["content"])]))
 
-    response = await _client.aio.models.generate_content(
+    response = await get_genai_client().aio.models.generate_content(
         model=settings.gemini_model,
         contents=contents,
         config=types.GenerateContentConfig(system_instruction=final_system_prompt),
@@ -63,7 +72,7 @@ async def generate_response_stream(messages: list[dict[str, str]], system_prompt
         role = "user" if msg["role"] == "user" else "model"
         contents.append(types.Content(role=role, parts=[types.Part(text=msg["content"])]))
 
-    stream = await _client.aio.models.generate_content_stream(
+    stream = await get_genai_client().aio.models.generate_content_stream(
         model=settings.gemini_model,
         contents=contents,
         config=types.GenerateContentConfig(system_instruction=final_system_prompt),

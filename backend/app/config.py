@@ -31,18 +31,14 @@ class Settings(BaseSettings):
 
     audio_sample_rate: int = 16000
     vad_aggressiveness: int = 2
-    silence_threshold_ms: int = 800
-    audio_chunk_ms: int = 250
-
-    ws_heartbeat_interval_s: int = 20
-    ws_receive_timeout_s: int = 180
-    ws_max_concurrent_audio_tasks: int = 32
+    # Consecutive trailing silence that ends a turn. Safe at this value now
+    # that silence is measured as a trailing run rather than a cumulative
+    # count of every unvoiced frame in the utterance.
+    silence_threshold_ms: int = 500
 
     ws_audio_executor_workers: int = 4
     ws_embedding_executor_workers: int = 2
     ws_queue_max_size: int = 1024
-
-    use_new_pipeline: bool = True
 
     pinecone_api_key: str = ""
     pinecone_index_name: str = "voice-agent-documents"

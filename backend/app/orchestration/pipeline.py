@@ -1,7 +1,6 @@
 import asyncio
 import logging
 import time
-import uuid
 from contextlib import suppress
 from dataclasses import dataclass, field
 from typing import Any
@@ -79,8 +78,12 @@ class SessionPipelineState:
     control_queue: asyncio.Queue = field(default_factory=asyncio.Queue)
     ws_event_queue: asyncio.Queue = field(default_factory=asyncio.Queue)
 
+    # STT results are collected in FIFO order so the VAD loop never blocks.
+    stt_pending_queue: asyncio.Queue = field(default_factory=asyncio.Queue)
+
     ws_in_task: asyncio.Task | None = None
     vad_stt_task: asyncio.Task | None = None
+    stt_collect_task: asyncio.Task | None = None
     rag_llm_task: asyncio.Task | None = None
     tts_task: asyncio.Task | None = None
     ws_out_task: asyncio.Task | None = None
@@ -94,13 +97,26 @@ class SessionPipelineState:
     current_turn_id: str | None = None
     is_speaking: bool = False
     speech_detected: asyncio.Event = field(default_factory=asyncio.Event)
+    # Fired at speech ONSET so the agent stops talking while the user is
+    # still speaking, rather than after they have finished.
+    speech_started: asyncio.Event = field(default_factory=asyncio.Event)
     cancelled_turns: set = field(default_factory=set)
+
+    # Fetched once per session instead of re-queried on every turn.
+    system_prompt: str = "You are a helpful voice assistant."
+    # Tracked in memory instead of a SELECT max() before every insert.
+    next_sequence_number: int = 0
+    # Strong refs to fire-and-forget work, so it is not garbage collected.
+    background_tasks: set = field(default_factory=set)
 
     call_started: bool = False
     event_seq: int = 0
 
     call_start_time: float | None = None
     turn_started_at: float | None = None
+    # Real measurement for the first sentence of the current turn; the
+    # 'latencies' event used to hardcode this to None.
+    last_tts_first_audio_ms: int | None = None
 
     user_pcm_buffer: bytearray = field(default_factory=bytearray)
 
@@ -115,6 +131,7 @@ class FiveQueuePipeline:
         from app.orchestration.stages import (
             ws_in_task,
             vad_stt_task,
+            stt_collect_task,
             rag_llm_task,
             tts_task,
             ws_out_task,
@@ -122,6 +139,7 @@ class FiveQueuePipeline:
         )
         state.ws_in_task = asyncio.create_task(ws_in_task(state))
         state.vad_stt_task = asyncio.create_task(vad_stt_task(state, self.vad_executor))
+        state.stt_collect_task = asyncio.create_task(stt_collect_task(state))
         state.rag_llm_task = asyncio.create_task(rag_llm_task(state, self.embedding_executor))
         state.tts_task = asyncio.create_task(tts_task(state, self.audio_executor))
         state.ws_out_task = asyncio.create_task(ws_out_task(state))
@@ -131,6 +149,7 @@ class FiveQueuePipeline:
         tasks = [
             state.ws_in_task,
             state.vad_stt_task,
+            state.stt_collect_task,
             state.rag_llm_task,
             state.tts_task,
             state.ws_out_task,
@@ -143,6 +162,11 @@ class FiveQueuePipeline:
             if task is not None:
                 with suppress(asyncio.CancelledError):
                     await task
+
+        for task in list(state.background_tasks):
+            if not task.done():
+                task.cancel()
+        state.background_tasks.clear()
 
         for queue in [
             state.audio_in_queue,
@@ -161,24 +185,6 @@ class FiveQueuePipeline:
     async def handle_barge_in(self, state: SessionPipelineState) -> None:
         if not state.is_speaking:
             return
-        state.current_turn_id = None
-        for subtask_attr in ("active_llm_subtask", "active_tts_subtask"):
-            subtask = getattr(state, subtask_attr)
-            if subtask is not None and not subtask.done():
-                subtask.cancel()
-                with suppress(asyncio.CancelledError):
-                    await subtask
-        while not state.sentence_queue.empty():
-            try:
-                state.sentence_queue.get_nowait()
-            except asyncio.QueueEmpty:
-                break
-        while not state.audio_out_queue.empty():
-            try:
-                state.audio_out_queue.get_nowait()
-            except asyncio.QueueEmpty:
-                break
-        state.is_speaking = False
-        safe_put_nowait(state.ws_event_queue, make_event(state, "turn_ended", reason="interrupted"))
-        safe_put_nowait(state.ws_event_queue, make_event(state, "status", message="idle"))
-        logger.info("STATUS_IDLE session=%s reason=interrupted", state.session_id)
+        from app.orchestration.stages import _cancel_current_turn
+
+        await _cancel_current_turn(state)

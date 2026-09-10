@@ -1,6 +1,7 @@
 import asyncio
 import json
 from collections import deque
+from datetime import datetime, timezone
 from typing import Dict
 from fastapi import WebSocket
 
@@ -82,13 +83,23 @@ class ConnectionManager:
         return list(self.ai_audio_segments.get(session_id, []))
 
     async def send_json(self, session_id: str, message: dict):
-        if session_id in self.active_connections:
-            await self.active_connections[session_id].send_json(message)
+        ws = self.active_connections.get(session_id)
+        if ws is None:
+            return
+        try:
+            await ws.send_json(message)
+        except Exception as exc:
+            await _append_log(session_id, {
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "level": "error",
+                "msg": f"WS send_json failed session={session_id} error={exc}",
+            })
 
     async def send_bytes(self, session_id: str, data: bytes):
-        if session_id in self.active_connections:
+        ws = self.active_connections.get(session_id)
+        if ws is not None:
             try:
-                await self.active_connections[session_id].send_bytes(data)
+                await ws.send_bytes(data)
             except Exception as exc:
                 await _append_log(session_id, {"ts": datetime.now(timezone.utc).isoformat(), "level": "error", "msg": f"WS send_bytes failed session={session_id} error={exc}"})
 
@@ -106,17 +117,19 @@ async def _append_log(session_id: str, entry: dict) -> None:
 async def _stream_session_logs(session_id: str):
     ev = asyncio.Event()
     session_log_events.setdefault(session_id, []).append(ev)
+    cursor = 0
     try:
-        for entry in list(session_logs.get(session_id, [])):
-            yield f"data: {json.dumps(entry)}\n\n"
         while True:
+            entries = list(session_logs.get(session_id, []))
+            for entry in entries[cursor:]:
+                yield f"data: {json.dumps(entry)}\n\n"
+            cursor = len(entries)
             await ev.wait()
             ev.clear()
-            while session_logs.get(session_id):
-                entry = session_logs[session_id].popleft()
-                yield f"data: {json.dumps(entry)}\n\n"
     finally:
-        session_log_events.get(session_id, []).remove(ev)
+        listeners = session_log_events.get(session_id, [])
+        if ev in listeners:
+            listeners.remove(ev)
 
 
 manager = ConnectionManager()

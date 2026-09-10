@@ -1,20 +1,18 @@
-import json
 import logging
 import asyncio
 import time
 import uuid
 from collections import defaultdict
-from contextlib import suppress
 from datetime import datetime, timezone
 from fastapi import APIRouter, WebSocket
 from app.websocket.manager import manager, _append_log
 from app.services.vad import VADBuffer
-from app.services.audio_processor import pcm_to_wav, compose_call_recording, save_session_recording
-from app.services.stt import transcribe_audio, is_noisy_transcription
+from app.services.audio_processor import compose_call_recording, save_session_recording
 from app.services.conversation_mgr import ConversationManager
 from app.services.call_summarizer import generate_call_summary
 from app.services.session import create_session, end_session, _get_default_persona_id
 from app.services.tts import get_persona_voice_id
+from app.services.llm import get_persona_system_prompt
 from app.models.database import get_supabase, run_supabase
 from app.config import settings
 from app.orchestration.pipeline import SessionPipelineState, FiveQueuePipeline, safe_put_nowait, make_event, TextInMessage
@@ -74,6 +72,9 @@ async def websocket_voice(websocket: WebSocket, session_id: str):
     finally:
         if _session_handler_tasks.get(session_id) is handler_task:
             del _session_handler_tasks[session_id]
+        lock = _session_handler_locks.get(session_id)
+        if lock is not None and not lock.locked():
+            _session_handler_locks.pop(session_id, None)
 
 
 async def _handle_voice_pipeline_v2(websocket: WebSocket, session_id: str) -> None:
@@ -101,6 +102,11 @@ async def _handle_voice_pipeline_v2(websocket: WebSocket, session_id: str) -> No
     manager.enable_recording(session_id)
     await _log_stage(session_id, "RECORDING_ENABLED")
 
+    try:
+        system_prompt = await get_persona_system_prompt(persona_id)
+    except Exception:
+        system_prompt = "You are a helpful voice assistant."
+
     conversation_mgr = ConversationManager()
     if existing_session:
         try:
@@ -123,6 +129,7 @@ async def _handle_voice_pipeline_v2(websocket: WebSocket, session_id: str) -> No
         control_queue=asyncio.Queue(maxsize=settings.ws_queue_max_size),
         ws_event_queue=asyncio.Queue(maxsize=settings.ws_queue_max_size),
         conversation_mgr=conversation_mgr,
+        system_prompt=system_prompt,
         vad=vad,
         speech_detected=asyncio.Event(),
         cancelled_turns=set(),
@@ -153,46 +160,36 @@ async def _handle_voice_pipeline_v2(websocket: WebSocket, session_id: str) -> No
             elif event.get("type") == "cancel_turn":
                 await pipeline.handle_barge_in(state)
             elif event.get("type") == "force_stt":
-                logger.info("FORCE_STT_RECEIVED session=%s call_started=%s", state.session_id, state.call_started)
+                logger.info("FORCE_STT_RECEIVED session=%s", state.session_id)
                 await pipeline.handle_barge_in(state)
-                vad_instance = state.vad
                 audio_data = await asyncio.get_running_loop().run_in_executor(
-                    pipeline.audio_executor, vad_instance.flush
+                    pipeline.audio_executor, state.vad.flush
                 )
                 if not audio_data:
                     safe_put_nowait(state.ws_event_queue, make_event(state, "status", message="idle"))
                     continue
-                wav_audio = await asyncio.get_running_loop().run_in_executor(
-                    pipeline.audio_executor, pcm_to_wav, audio_data, settings.audio_sample_rate
-                )
-                stt_start = time.perf_counter()
-                try:
-                    user_text = await asyncio.wait_for(transcribe_audio(wav_audio), timeout=15)
-                except asyncio.TimeoutError:
-                    safe_put_nowait(state.ws_event_queue, make_event(state, "error", message="stt_timeout"))
-                    safe_put_nowait(state.ws_event_queue, make_event(state, "status", message="idle"))
-                    continue
-                stt_latency_ms = int((time.perf_counter() - stt_start) * 1000)
-                logger.info("FORCE_STT_TRANSCRIPTION session=%s text=%r latency_ms=%s", state.session_id, user_text, stt_latency_ms)
-                if not user_text or is_noisy_transcription(user_text):
-                    safe_put_nowait(state.ws_event_queue, make_event(state, "error", message="empty_transcript"))
-                    safe_put_nowait(state.ws_event_queue, make_event(state, "status", message="idle"))
-                    continue
+                # Dispatched through the normal STT path so the control loop
+                # stays responsive to stop_call and barge-in while it runs.
+                from app.orchestration.stages import _transcribe
+                stt_task = asyncio.create_task(_transcribe(audio_data, pipeline.audio_executor))
                 state.user_pcm_buffer.clear()
-                safe_put_nowait(
-                    state.ws_event_queue,
-                    make_event(state, "transcript_final", role="user", text=user_text, stt_latency_ms=stt_latency_ms),
-                )
-                safe_put_nowait(state.text_in_queue, TextInMessage(
-                    session_id=state.session_id,
-                    text=user_text,
-                    stt_latency_ms=stt_latency_ms,
-                ))
+                safe_put_nowait(state.stt_pending_queue, (stt_task, None, None))
             elif event.get("type") == "external_transcript":
-                data = event["data"]
+                data = event["data"] or {}
+                nested = data.get("data") if isinstance(data.get("data"), dict) else {}
+                text = (nested.get("text") or data.get("text") or "").strip()
+                if not text:
+                    safe_put_nowait(
+                        state.ws_event_queue,
+                        make_event(state, "error", message="empty_transcript"),
+                    )
+                    continue
+                safe_put_nowait(state.ws_event_queue, make_event(
+                    state, "transcript_final", role="user", text=text,
+                ))
                 safe_put_nowait(state.text_in_queue, TextInMessage(
                     session_id=state.session_id,
-                    text=data.get("text", ""),
+                    text=text,
                     stt_latency_ms=None,
                 ))
     finally:

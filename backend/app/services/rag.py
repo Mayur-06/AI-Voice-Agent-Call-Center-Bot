@@ -1,7 +1,9 @@
+import asyncio
 import logging
 import os
 import re
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
 from pinecone import Pinecone
@@ -15,6 +17,28 @@ _chunk_size = 500
 _chunk_overlap = 50
 _pinecone_index = None
 _model = None
+
+# Dedicated pool. These calls previously ran on the default executor, which is
+# also what asyncio.to_thread (and therefore every Supabase query) uses, so
+# embedding, Pinecone and the database all contended for the same few threads.
+_rag_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="rag")
+
+
+def _run(fn, *args):
+    return asyncio.get_running_loop().run_in_executor(_rag_executor, fn, *args)
+
+
+def warm_up() -> None:
+    """Load the embedding model at startup.
+
+    Left lazy, the first RAG-triggering turn of the first call paid the model
+    load (and possibly a download) inside the user's critical path.
+    """
+    try:
+        _get_model()
+        logger.info("Embedding model warmed up")
+    except Exception as exc:
+        logger.warning("Embedding model warm-up failed: %s", exc)
 
 
 if settings.hf_hub_disable_symlinks_warning:
@@ -104,8 +128,6 @@ async def store_chunks_in_pinecone(document_id: str, chunks: list[str], embeddin
 
 
 async def _query_pinecone(query_embedding: list[float], top_k: int, filter_dict: Optional[dict]) -> list[tuple[str, str]]:
-    import asyncio
-    loop = asyncio.get_running_loop()
     index = _get_pinecone_index()
 
     def _do_query():
@@ -116,7 +138,7 @@ async def _query_pinecone(query_embedding: list[float], top_k: int, filter_dict:
             include_metadata=True,
         )
 
-    results = await loop.run_in_executor(None, _do_query)
+    results = await _run(_do_query)
     chunks = []
     for match in results.matches:
         text = match.metadata.get("text", "")
@@ -127,9 +149,7 @@ async def _query_pinecone(query_embedding: list[float], top_k: int, filter_dict:
 
 
 async def retrieve_relevant_chunks(query: str, persona_id: str, top_k: int = 3) -> list[tuple[str, str]]:
-    import asyncio
-    loop = asyncio.get_running_loop()
-    query_embedding = await loop.run_in_executor(None, _encode_query, query)
+    query_embedding = await _run(_encode_query, query)
 
     filter_dict = {"persona_id": {"$eq": str(persona_id)}}
     chunks = await _query_pinecone(query_embedding, top_k, filter_dict)
@@ -195,10 +215,14 @@ def requires_rag(query: str) -> bool:
     }
 
     q_lower = query.lower().strip()
-    if any(q_lower.startswith(w) or f" {w} " in f" {q_lower} " for w in question_words):
-        return True
+    # Small talk short-circuits first: it must not trigger retrieval.
+    if any(q_lower.startswith(p) for p in casual_phrases):
+        return False
+    # An explicit reference to source material always retrieves.
     if any(indicator in q_lower for indicator in document_indicators):
         return True
-    if any(q_lower.startswith(p) or f" {p} " in f" {q_lower} " for p in casual_phrases):
-        return False
-    return len(q_lower.split()) > 3
+    # A question only retrieves if it is substantive enough to be about
+    # something in the knowledge base.
+    if any(q_lower.startswith(w) or f" {w} " in f" {q_lower} " for w in question_words):
+        return len(q_lower.split()) > 4
+    return False

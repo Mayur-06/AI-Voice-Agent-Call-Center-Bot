@@ -1,6 +1,9 @@
+import asyncio
 import logging
+import logging.handlers
 import os
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+import queue
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -8,32 +11,39 @@ from app.config import settings
 from app.routers import personas, sessions, documents, voices, analytics
 from app.routers import transcripts, recordings, sentiment as sentiment_router, metrics, exports
 from app.websocket.handler import router as ws_router
-from app.services.rag import check_pinecone_health
+from app.services.rag import check_pinecone_health, warm_up as warm_up_embeddings
+from app.services.stt import close_client as close_stt_client
 from app.services.storage import ensure_recordings_bucket, ensure_documents_bucket
 
 # Ensure log directory exists
 log_dir = os.path.join(os.path.dirname(__file__), "..", "log")
 os.makedirs(log_dir, exist_ok=True)
 
-# Configure logging to both console and file
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s %(message)s",
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler(os.path.join(log_dir, "backend.log"), mode="a"),
-    ],
+# Logging is routed through a queue so that writing to disk never blocks the
+# event loop. A synchronous FileHandler called from async code adds latency
+# jitter to the audio path on every log line.
+_log_queue: queue.Queue = queue.Queue(-1)
+_formatter = logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s")
+_stream_handler = logging.StreamHandler()
+_stream_handler.setFormatter(_formatter)
+_file_handler = logging.FileHandler(os.path.join(log_dir, "backend.log"), mode="a")
+_file_handler.setFormatter(_formatter)
+_log_listener = logging.handlers.QueueListener(
+    _log_queue, _stream_handler, _file_handler, respect_handler_level=True
 )
-logger = logging.getLogger(__name__)
 
-# Ensure VAD logger propagates
-logging.getLogger("app.services.vad").setLevel(logging.INFO)
-logging.getLogger("app.orchestration.stages").setLevel(logging.INFO)
+logging.basicConfig(level=logging.INFO, handlers=[logging.handlers.QueueHandler(_log_queue)])
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("Startup: supabase_url=%s anon_key=%s service_key=%s cwd=%s", bool(settings.supabase_url), bool(settings.supabase_anon_key), bool(settings.supabase_service_role_key), __import__("os").getcwd())
+    _log_listener.start()
+    logger.info(
+        "Startup: supabase_url=%s anon_key=%s service_key=%s cwd=%s",
+        bool(settings.supabase_url), bool(settings.supabase_anon_key),
+        bool(settings.supabase_service_role_key), os.getcwd(),
+    )
     check_pinecone_health()
     ensure_documents_bucket()
     ensure_recordings_bucket()
@@ -45,15 +55,19 @@ async def lifespan(app: FastAPI):
         max_workers=1,
         thread_name_prefix="vad",
     )
-    app.state.embedding_executor = ProcessPoolExecutor(
-        max_workers=settings.ws_embedding_executor_workers,
-    )
+    # RAG owns its own pool (app.services.rag). The ProcessPoolExecutor that
+    # used to live here forked the whole application and was never used.
+    app.state.embedding_executor = None
+
+    # Warm the embedding model off the critical path of the first call.
+    asyncio.get_running_loop().run_in_executor(None, warm_up_embeddings)
     try:
         yield
     finally:
+        await close_stt_client()
         app.state.audio_executor.shutdown(wait=True)
         app.state.vad_executor.shutdown(wait=True)
-        app.state.embedding_executor.shutdown(wait=True)
+        _log_listener.stop()
 
 
 app = FastAPI(title="AI Voice Agent Backend", version="1.0.0", lifespan=lifespan)

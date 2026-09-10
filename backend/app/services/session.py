@@ -84,22 +84,28 @@ async def save_turn(session_id: str, speaker: str, text: str, sentiment: str | N
                     stt_latency_ms: int | None = None, llm_latency_ms: int | None = None,
                     tts_first_audio_latency_ms: int | None = None,
                     recording_start_ms: int | None = None, recording_end_ms: int | None = None,
-                    message_id: str | None = None):
+                    message_id: str | None = None, sequence_number: int | None = None):
     client = get_supabase()
-    seq = 0
-    try:
-        existing = await run_supabase(
-            lambda: client.table("messages")
-            .select("sequence_number")
-            .eq("session_id", session_id)
-            .order("sequence_number", desc=True)
-            .limit(1)
-            .execute()
-        )
-        if existing.data:
-            seq = existing.data[0]["sequence_number"] + 1
-    except Exception:
-        pass
+    if sequence_number is not None:
+        # Caller tracks the counter in memory. Avoids a SELECT round-trip
+        # before every insert, and the race where two concurrent turns both
+        # read the same max().
+        seq = sequence_number
+    else:
+        seq = 0
+        try:
+            existing = await run_supabase(
+                lambda: client.table("messages")
+                .select("sequence_number")
+                .eq("session_id", session_id)
+                .order("sequence_number", desc=True)
+                .limit(1)
+                .execute()
+            )
+            if existing.data:
+                seq = existing.data[0]["sequence_number"] + 1
+        except Exception:
+            pass
     payload = {
         "session_id": session_id,
         "speaker": speaker,

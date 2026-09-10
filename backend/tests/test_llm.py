@@ -90,7 +90,7 @@ async def test_generate_response_stream_success(mock_settings):
             self._index += 1
             return item
 
-    mock_client.aio.models.generate_content_stream = MagicMock(return_value=_MockAsyncIter([
+    mock_client.aio.models.generate_content_stream = AsyncMock(return_value=_MockAsyncIter([
         _make_mock_chunk("Generated"),
         _make_mock_chunk(" response"),
     ]))
@@ -121,7 +121,7 @@ async def test_generate_response_stream_multiple_turns(mock_settings):
             self._index += 1
             return item
 
-    mock_client.aio.models.generate_content_stream = MagicMock(return_value=_MockAsyncIter([
+    mock_client.aio.models.generate_content_stream = AsyncMock(return_value=_MockAsyncIter([
         _make_mock_chunk("Reply"),
     ]))
 
