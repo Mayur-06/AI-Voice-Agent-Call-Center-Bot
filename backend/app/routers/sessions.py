@@ -43,9 +43,13 @@ async def list_sessions():
     voice_ids = [s.get("selected_voice") for s in sessions if s.get("selected_voice")]
     voice_map = {}
     if voice_ids:
-        voices_res = supabase.table("voices").select("id, name").in_("voice_id", voice_ids).execute()
+        voices_res = supabase.table("voices").select("voice_id, name").in_("voice_id", voice_ids).execute()
         for v in (voices_res.data or []):
-            voice_map[str(v["voice_id"])] = v.get("name", "Unknown")
+            voice_id = v.get("voice_id")
+            if not voice_id:
+                continue
+            print(f"Mapping voice_id {voice_id} to name {v.get('name', 'Unknown')}")
+            voice_map[str(voice_id)] = v.get("name", "Unknown")
 
     result = []
     for s in sessions:

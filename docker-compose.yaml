@@ -1,0 +1,25 @@
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: ai-voice-agent-backend
+    ports:
+      - "8001:8001"
+    env_file:
+      - ./backend/.env
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./AI-Voice-Agent-App
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: http://116.202.210.102:8001
+        VITE_WS_URL: ws://116.202.210.102:8001/ws/voice
+    container_name: ai-voice-agent-frontend
+    ports:
+      - "8080:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
