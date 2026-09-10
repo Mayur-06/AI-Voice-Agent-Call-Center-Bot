@@ -5,6 +5,7 @@ import logging
 import queue
 import re
 
+import numpy as np
 from edge_tts import Communicate
 from app.config import settings
 from app.models.database import get_supabase, run_supabase
@@ -16,6 +17,66 @@ from app.services.audio_processor import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Edge TTS pads every utterance with roughly 0.26s of leading and 0.86s of
+# trailing silence. Synthesising per sentence meant ~1.1s of dead air at every
+# sentence boundary, which dominates how sluggish the agent sounds.
+_SILENCE_LEVEL = 300           # int16 amplitude treated as silence
+_ONSET_PAD_MS = 30             # keep a little before speech starts
+_TAIL_HOLD_MS = 1200           # buffer enough to trim the trailing pad
+_GAP_KEEP_MS = 90              # natural pause left at the end of a sentence
+
+
+def _first_voiced_index(pcm: bytes) -> int | None:
+    samples = np.frombuffer(pcm[: len(pcm) - (len(pcm) % 2)], dtype="<i2")
+    voiced = np.flatnonzero(np.abs(samples) > _SILENCE_LEVEL)
+    return int(voiced[0]) if voiced.size else None
+
+
+def _last_voiced_index(pcm: bytes) -> int | None:
+    samples = np.frombuffer(pcm[: len(pcm) - (len(pcm) % 2)], dtype="<i2")
+    voiced = np.flatnonzero(np.abs(samples) > _SILENCE_LEVEL)
+    return int(voiced[-1]) if voiced.size else None
+
+
+async def _trim_silence(pcm_chunks, sample_rate: int):
+    """Strip the leading and trailing silence Edge TTS adds to each utterance.
+
+    Leading silence is dropped as it arrives. Trailing silence needs the end of
+    the stream to identify, so a rolling tail is held back and trimmed once
+    synthesis finishes.
+    """
+    bps = sample_rate * 2
+    onset_pad = int(_ONSET_PAD_MS / 1000 * bps) & ~1
+    hold = int(_TAIL_HOLD_MS / 1000 * bps) & ~1
+    keep = int(_GAP_KEEP_MS / 1000 * bps) & ~1
+
+    started = False
+    tail = bytearray()
+    async for chunk in pcm_chunks:
+        if not started:
+            idx = _first_voiced_index(chunk)
+            if idx is None:
+                continue  # still in the leading pad
+            start = max(0, idx * 2 - onset_pad)
+            chunk = chunk[start:]
+            started = True
+        tail.extend(chunk)
+        if len(tail) > hold:
+            emit = bytes(tail[: len(tail) - hold])
+            del tail[: len(tail) - hold]
+            if emit:
+                yield emit
+
+    if not started:
+        return
+    last = _last_voiced_index(bytes(tail))
+    if last is None:
+        remainder = bytes(tail[:keep])
+    else:
+        remainder = bytes(tail[: min(len(tail), last * 2 + 2 + keep)])
+    if remainder:
+        yield remainder
 
 _MARKDOWN_PATTERN = re.compile(
     r"(\*\*|__)(.*?)\1|"          # bold
@@ -94,14 +155,19 @@ async def synthesize_speech_stream(text: str, voice_id: str):
 
     decoder = loop.run_in_executor(None, _decode_worker)
     feeder = asyncio.create_task(_feed_mp3())
-    try:
+
+    async def _raw_pcm():
         while True:
             item = await pcm_queue.get()
             if item is None:
-                break
+                return
             if isinstance(item, BaseException):
                 raise RuntimeError(f"Edge TTS decode failed: {item}") from item
-            yield pcm_to_wav(item, sample_rate=sample_rate)
+            yield item
+
+    try:
+        async for trimmed in _trim_silence(_raw_pcm(), sample_rate):
+            yield pcm_to_wav(trimmed, sample_rate=sample_rate)
     finally:
         # On barge-in this generator is closed early: unblock both workers.
         if not feeder.done():

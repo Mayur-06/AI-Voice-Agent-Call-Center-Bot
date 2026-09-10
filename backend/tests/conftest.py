@@ -38,7 +38,10 @@ def mock_settings():
 
 @pytest.fixture(scope="session")
 def mp3_bytes() -> bytes:
-    """A real, decodable MP3 (1s of 440 Hz tone).
+    """A real, decodable MP3 (3s of 440 Hz tone).
+
+    Longer than the trailing-silence hold window in synthesize_speech_stream,
+    so progressive streaming is observable.
 
     The TTS tests previously fed literal b"fake-mp3-bytes" into a code path
     that decodes audio, so they could only ever fail.
@@ -53,7 +56,7 @@ def mp3_bytes() -> bytes:
     stream = container.add_stream("mp3", rate=44100)
     stream.layout = "mono"
     sr = 44100
-    t = np.arange(int(sr * 1.0), dtype=np.float32) / sr
+    t = np.arange(int(sr * 3.0), dtype=np.float32) / sr
     tone = (np.sin(2 * math.pi * 440 * t) * 20000).astype(np.int16).reshape(1, -1)
     frame = av.AudioFrame.from_ndarray(tone, format="s16", layout="mono")
     frame.rate = sr

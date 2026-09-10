@@ -84,7 +84,7 @@ async def test_synthesize_speech_stream_yields_chunks(mock_settings, mp3_bytes):
     for chunk in chunks:
         assert chunk[:4] == b"RIFF", "each chunk must be independently playable"
     pcm_bytes = sum(len(c) - 44 for c in chunks)
-    assert 0.8 < pcm_bytes / (16000 * 2) < 1.3
+    assert 2.5 < pcm_bytes / (16000 * 2) < 3.3
 
 
 @pytest.mark.asyncio
@@ -105,3 +105,59 @@ async def test_synthesize_speech_stream_closes_early_on_barge_in(mock_settings, 
         first = await gen.__anext__()
         assert first[:4] == b"RIFF"
         await asyncio.wait_for(gen.aclose(), timeout=5)
+
+@pytest.mark.asyncio
+async def test_synthesize_speech_stream_trims_edge_tts_silence_padding(mock_settings):
+    """Edge TTS pads each utterance with leading and trailing silence.
+
+    Measured against the live service at roughly 0.26s leading and 0.86s
+    trailing. Synthesising per sentence meant ~1.1s of dead air at every
+    sentence boundary, which is a large part of why the agent sounded sluggish.
+    """
+    import io
+    import math
+    import av
+    import numpy as np
+
+    # 0.3s silence, 1.5s tone, 0.9s silence - the shape Edge TTS returns.
+    sr = 44100
+    silence_a = np.zeros(int(sr * 0.3), dtype=np.int16)
+    t = np.arange(int(sr * 1.5), dtype=np.float32) / sr
+    tone = (np.sin(2 * math.pi * 440 * t) * 20000).astype(np.int16)
+    silence_b = np.zeros(int(sr * 0.9), dtype=np.int16)
+    full = np.concatenate([silence_a, tone, silence_b]).reshape(1, -1)
+
+    buf = io.BytesIO()
+    container = av.open(buf, mode="w", format="mp3")
+    stream = container.add_stream("mp3", rate=sr)
+    stream.layout = "mono"
+    frame = av.AudioFrame.from_ndarray(full, format="s16", layout="mono")
+    frame.rate = sr
+    for packet in stream.encode(frame):
+        container.mux(packet)
+    for packet in stream.encode(None):
+        container.mux(packet)
+    container.close()
+    padded_mp3 = buf.getvalue()
+
+    async def mock_stream():
+        for i in range(0, len(padded_mp3), 800):
+            yield {"type": "audio", "data": padded_mp3[i:i + 800]}
+
+    with patch("app.services.tts.Communicate") as MockCommunicate:
+        instance = MagicMock()
+        instance.stream.return_value = mock_stream()
+        MockCommunicate.return_value = instance
+        pcm = b""
+        async for chunk in synthesize_speech_stream("tone", "en-US-GuyNeural"):
+            pcm += chunk[44:]
+
+    duration = len(pcm) / (16000 * 2)
+    # 2.7s in, ~1.5s of speech plus a small deliberate gap out.
+    assert 1.4 < duration < 1.8, f"expected padding removed, got {duration:.2f}s"
+
+    samples = np.frombuffer(pcm, dtype="<i2")
+    voiced = np.flatnonzero(np.abs(samples) > 300)
+    assert voiced.size, "trimming removed the speech itself"
+    assert voiced[0] / 16000 < 0.06, "leading silence was not trimmed"
+    assert (samples.size - voiced[-1]) / 16000 < 0.16, "trailing silence was not trimmed"
