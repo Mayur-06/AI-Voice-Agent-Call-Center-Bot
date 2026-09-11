@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { API_BASE, apiFetch } from '@/config';
+import { Progress } from '@/components/ui/progress';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   BarChart, Bar, Legend, PieChart, Pie, Cell,
@@ -11,6 +12,7 @@ export default function AnalyticsDashboard() {
   const [analytics, setAnalytics] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [progress, setProgress] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -32,9 +34,38 @@ export default function AnalyticsDashboard() {
     return () => { cancelled = true; };
   }, []);
 
-  if (loading) return <div className="p-4 sm:p-6">Loading analytics...</div>;
-  if (error) return <div className="p-4 sm:p-6 text-red-500">{error}</div>;
-  if (!analytics) return <div className="p-4 sm:p-6">No analytics available.</div>;
+  useEffect(() => {
+    if (!loading) {
+      setProgress(100);
+      return;
+    }
+
+    setProgress(15);
+    const start = Date.now();
+    const timer = setInterval(() => {
+      const elapsed = Date.now() - start;
+      const nextProgress = Math.min(95, 15 + Math.round((elapsed / 9000) * 80));
+      setProgress(nextProgress);
+    }, 250);
+
+    return () => clearInterval(timer);
+  }, [loading]);
+
+  if (loading) {
+    return (
+      <div className="flex min-h-screen w-full items-center justify-center p-6">
+        <div className="post-call-loading-card">
+          <h2 className="post-call-loading-title">Loading analytics</h2>
+          <p className="post-call-loading-text">
+            We&apos;re gathering the latest session insights and trends.
+          </p>
+          <Progress value={progress} className="post-call-progress" />
+        </div>
+      </div>
+    );
+  }
+  if (error) return <div className="p-6 text-red-500">{error}</div>;
+  if (!analytics) return <div className="p-6">No analytics available.</div>;
 
   const sentimentEntries = Object.entries(analytics.sentiment_breakdown || {});
   const sentimentPieData = sentimentEntries.map(([name, value]) => ({ name, value }));

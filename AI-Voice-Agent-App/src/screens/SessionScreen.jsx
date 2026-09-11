@@ -173,6 +173,7 @@ export default function SessionScreen() {
   const [voices, setVoices] = useState([]);
   const [pastSessions, setPastSessions] = useState([]);
   const [sessionsLoading, setSessionsLoading] = useState(true);
+  const [isPastSessionsDrawerOpen, setIsPastSessionsDrawerOpen] = useState(false);
   const fileInputRef = useRef(null);
   const dragCounterRef = useRef(0);
   const uploadedDocuments = useCallStore((s) => s.uploadedDocuments);
@@ -224,6 +225,28 @@ export default function SessionScreen() {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    const handleResize = () => {
+      if (window.innerWidth >= 1024) {
+        setIsPastSessionsDrawerOpen(false);
+      }
+    };
+
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape' && isPastSessionsDrawerOpen) {
+        setIsPastSessionsDrawerOpen(false);
+      }
+    };
+
+    window.addEventListener('resize', handleResize);
+    window.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      window.removeEventListener('resize', handleResize);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isPastSessionsDrawerOpen]);
 
   const handleFiles = useCallback(async (files) => {
     const fileArray = Array.from(files).filter((file) => {
@@ -378,7 +401,7 @@ export default function SessionScreen() {
           <Button
             variant="ghost"
             size="sm"
-            onClick={() => navigate('/session')}
+            onClick={() => setIsPastSessionsDrawerOpen(true)}
             className="text-xs font-medium"
             style={{ color: 'rgba(251, 251, 255, 0.8)' }}
           >
@@ -473,29 +496,6 @@ export default function SessionScreen() {
               </div>
             </section>
 
-            {/* Past Sessions */}
-            {!sessionsLoading && pastSessions.length > 0 && (
-              <section className="session-setup-past-section" style={{ marginTop: '1.5rem' }}>
-                <div className="session-setup-section-header">
-                  <h2 className="session-setup-section-title">Past Sessions</h2>
-                </div>
-                <div className="past-sessions-list">
-                  {pastSessions.map((session) => (
-                    <button
-                      key={session.id}
-                      type="button"
-                      className="past-session-item"
-                      onClick={() => navigate(`/review/${session.id}`)}
-                    >
-                      <span className="past-session-id">{session.id}</span>
-                      <span className="past-session-meta">
-                        {session.persona_name || 'Unknown'} · {session.selected_voice_name || 'Default'} · {session.status || 'completed'}
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              </section>
-            )}
           </div>
 
           {/* ─── RIGHT: Voice + Reference Notes ─────────────────────── */}
@@ -680,6 +680,59 @@ export default function SessionScreen() {
           </div>
         </div>
       </main>
+
+      {isPastSessionsDrawerOpen && (
+        <>
+          <div
+            className="vc-drawer-backdrop"
+            onClick={() => setIsPastSessionsDrawerOpen(false)}
+            aria-hidden="true"
+          />
+          <aside className="session-past-drawer-panel" role="dialog" aria-modal="true" aria-label="Past Sessions">
+            <div className="vc-drawer-header">
+              <h2 className="vc-drawer-title">Past Sessions</h2>
+              <button
+                type="button"
+                className="vc-drawer-close"
+                onClick={() => setIsPastSessionsDrawerOpen(false)}
+                aria-label="Close past sessions"
+              >
+                <CloseIcon />
+              </button>
+            </div>
+            <div className="session-past-drawer-scroll" style={{ padding: '1rem', overflowY: 'auto' }}>
+              {sessionsLoading ? (
+                <div className="session-past-drawer-loading">
+                  <div className="vc-loader-spinner" aria-label="Loading sessions" />
+                </div>
+              ) : pastSessions.length === 0 ? (
+                <div style={{ fontSize: '0.875rem', color: 'rgba(3, 25, 30, 0.6)', padding: '0.75rem 0' }}>
+                  No past sessions yet.
+                </div>
+              ) : (
+                <div className="past-sessions-list">
+                  {pastSessions.map((session) => (
+                    <button
+                      key={session.id}
+                      type="button"
+                      className="past-session-item"
+                      onClick={() => {
+                        setIsPastSessionsDrawerOpen(false);
+                        navigate(`/review/${session.id}`);
+                      }}
+                    >
+                      <span className="past-session-id">{session.id}</span>
+                      <span className="past-session-meta">
+                        {session.persona_name || 'Unknown'} · {session.selected_voice_name || 'Default'} · {session.status || 'completed'}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </aside>
+        </>
+      )}
 
       {/* ─── Sticky Footer Dock ─────────────────────────────────────── */}
       <footer className="session-setup-dock">
