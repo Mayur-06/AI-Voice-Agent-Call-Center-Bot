@@ -780,6 +780,7 @@
   background-color: rgba(251, 251, 255, 0.95);
   backdrop-filter: blur(8px);
   border-top: 1px solid var(--borderline, rgba(3, 25, 30, 0.12));
+  padding-bottom: env(safe-area-inset-bottom, 0px);
 }
 
 .session-setup-dock-inner {
@@ -909,13 +910,15 @@
 
 /* ─── Responsive ───────────────────────────────────────────────────────────── */
 
-@media (max-width: 640px) {
+@media (max-width: 639.98px) {
   .session-setup-header {
     padding: 0 1rem;
     height: 3.5rem;
   }
   .session-setup-main {
-    padding: 1.5rem 1rem 6.5rem;
+    /* The dock stacks on mobile (~7rem tall); leave clearance plus the
+       home-indicator inset so the last card never sits underneath it. */
+    padding: 1.5rem 1rem calc(9rem + env(safe-area-inset-bottom, 0px));
   }
   .session-setup-dock-inner {
     padding: 0.75rem 1rem;
@@ -1054,6 +1057,14 @@
   background-color: rgba(255, 255, 255, 0.16) !important;
 }
 
+@media (max-width: 767.98px), (min-width: 1024px) {
+  /* Phones reach Session Context through .vc-mobile-nav and desktops through
+     the permanent sidebar, so the pill is for tablets only. */
+  .vc-context-toggle-btn {
+    display: none !important;
+  }
+}
+
 .vc-context-toggle-badge {
   display: inline-flex;
   align-items: center;
@@ -1156,6 +1167,7 @@
   display: flex;
   align-items: center;
   gap: 0.625rem;
+  min-width: 0;
 }
 
 .vc-app-bar-logo {
@@ -1181,6 +1193,8 @@
   letter-spacing: -0.01em;
   line-height: 1;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .vc-app-bar-context {
@@ -1214,6 +1228,7 @@
   display: flex;
   align-items: center;
   gap: 0.75rem;
+  flex-shrink: 0;
 }
 
 .vc-connection-indicator {
@@ -1775,12 +1790,20 @@
 /* ─── Context Column (Right) ─────────────────────────────────────────────── */
 
 .vc-context-column {
-  display: flex;
+  /* Permanent sidebar on desktop only; below 1024px the same content is
+     reached through the slide-over drawer. */
+  display: none;
   flex-direction: column;
   min-height: 0;
   border-left: 1px solid var(--borderline, rgba(3, 25, 30, 0.12));
   background-color: var(--ghost-white);
   overflow-y: auto;
+}
+
+@media (min-width: 1024px) {
+  .vc-context-column {
+    display: flex;
+  }
 }
 
 .vc-context-card {
@@ -2042,10 +2065,16 @@
 }
 
 .vc-controls-left {
-  display: flex;
+  display: none;
   align-items: center;
   gap: 0.75rem;
   width: 10rem;
+}
+
+@media (min-width: 1024px) {
+  .vc-controls-left {
+    display: flex;
+  }
 }
 
 .vc-audio-indicator {
@@ -2240,6 +2269,12 @@
   animation: vc-fade-in 0.25s ease-out;
 }
 
+@media (min-width: 768px) {
+  .vc-mobile-caption {
+    display: none;
+  }
+}
+
 .vc-mobile-caption:hover {
   background-color: rgba(235, 225, 193, 0.75);
   transform: translateY(-1px);
@@ -2396,6 +2431,18 @@
 /* ─── Responsive Adjustments ──────────────────────────────────────────────── */
 
 @media (max-width: 767px) {
+  /* Below the two-column breakpoint only one pane is on screen at a time;
+     .vc-mobile-nav picks which one. */
+  .vc-transcript-column,
+  .vc-aura-column {
+    display: none;
+  }
+  .vc-transcript-column.vc-pane--active,
+  .vc-aura-column.vc-pane--active {
+    display: flex;
+    flex: 1 1 auto;
+    min-height: 0;
+  }
   .vc-app-bar-inner {
     padding: 0 1rem;
     gap: 0.5rem;
@@ -3001,7 +3048,7 @@
 }
 
 /* Responsive */
-@media (max-width: 640px) {
+@media (max-width: 639.98px) {
   .post-call-main {
     padding: 1.5rem 1rem 3rem;
   }

@@ -60,7 +60,11 @@ async def _ensure_personas():
         for row in rows:
             existing = await run_supabase(lambda: supabase.table("personas").select("id").eq("name", row["name"]).limit(1).execute())
             if existing.data:
-                await run_supabase(lambda: supabase.table("personas").update(row).eq("id", existing.data[0]["id"]).execute())
+                # _persona_row() mints a new uuid every call. Sending it in an
+                # UPDATE tried to rewrite the primary key and returned 409 on
+                # every GET /api/personas, so seeded rows never refreshed.
+                update_row = {k: v for k, v in row.items() if k not in ("id", "created_at")}
+                await run_supabase(lambda: supabase.table("personas").update(update_row).eq("id", existing.data[0]["id"]).execute())
             else:
                 await run_supabase(lambda: supabase.table("personas").insert(row).execute())
     except Exception:
@@ -71,7 +75,7 @@ async def _ensure_personas():
 async def list_personas():
     await _ensure_personas()
     supabase = get_supabase()
-    res = supabase.table("personas").select("*").order("name").execute()
+    res = await run_supabase(lambda: supabase.table("personas").select("*").order("name").execute())
     return [Persona(**row) for row in (res.data or [])]
 
 
@@ -79,7 +83,7 @@ async def list_personas():
 async def create_persona(persona_data: PersonaCreate):
     supabase = get_supabase()
     payload = _persona_row(persona_data.model_dump())
-    res = supabase.table("personas").insert(payload).execute()
+    res = await run_supabase(lambda: supabase.table("personas").insert(payload).execute())
     if not res.data:
         raise HTTPException(status_code=500, detail="Failed to create persona")
     return Persona(**res.data[0])

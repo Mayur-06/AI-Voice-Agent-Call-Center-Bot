@@ -31,7 +31,6 @@ export default function PostCallReviewScreen() {
   const { sessionId } = useParams();
   const navigate = useNavigate();
   const [session, setSession] = useState(null);
-  const [summary, setSummary] = useState('');
   const [summaryObj, setSummaryObj] = useState(null);
   const [recordingUrl, setRecordingUrl] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -44,7 +43,7 @@ export default function PostCallReviewScreen() {
   const [searchQuery, setSearchQuery] = useState('');
   const [copied, setCopied] = useState(false);
   const [waitingForEnd, setWaitingForEnd] = useState(false);
-  const [reviewProgress, setReviewProgress] = useState(0);
+  const [elapsedProgress, setElapsedProgress] = useState(15);
   const audioRef = useRef(null);
   const recordingUrlRef = useRef(recordingUrl);
 
@@ -84,7 +83,6 @@ export default function PostCallReviewScreen() {
           const summaryData = await summaryRes.json();
           if (!cancelled) {
             const raw = summaryData.summary || '';
-            setSummary(raw);
             try {
               setSummaryObj(JSON.parse(raw));
             } catch {
@@ -125,24 +123,23 @@ export default function PostCallReviewScreen() {
     };
   }, [sessionId]);
 
+  // Only the ticking timer lives in the effect; the finished value is derived
+  // below rather than written back into state from inside the effect.
   useEffect(() => {
-    if (!sessionId) return;
+    if (!sessionId || !waitingForEnd) return undefined;
 
-    if (!waitingForEnd) {
-      setReviewProgress(100);
-      return;
-    }
-
-    setReviewProgress(15);
+    // No synchronous reset here: the first tick 250ms later recomputes the
+    // value from a fresh `start`, which lands back at ~15 on its own.
     const start = Date.now();
     const timer = setInterval(() => {
       const elapsed = Date.now() - start;
-      const nextProgress = Math.min(95, 15 + Math.round((elapsed / 9000) * 80));
-      setReviewProgress(nextProgress);
+      setElapsedProgress(Math.min(95, 15 + Math.round((elapsed / 9000) * 80)));
     }, 250);
 
     return () => clearInterval(timer);
   }, [sessionId, waitingForEnd]);
+
+  const reviewProgress = waitingForEnd ? elapsedProgress : 100;
 
   useEffect(() => {
     if (!sessionId || !waitingForEnd) return;
@@ -169,7 +166,6 @@ export default function PostCallReviewScreen() {
           if (summaryRes.ok) {
             const summaryData = await summaryRes.json();
             const raw = summaryData.summary || '';
-            setSummary(raw);
             try {
               setSummaryObj(JSON.parse(raw));
             } catch {
@@ -385,7 +381,11 @@ export default function PostCallReviewScreen() {
   }, [session, sentiment]);
 
   const currentMessageId = useMemo(() => {
-    if (!session?.messages || !audioRef.current) return null;
+    // audioRef.current was read here to gate on the player being mounted, but
+    // a ref read during render does not re-run the memo when it changes, so
+    // the highlight could stick on the first computed value. currentTime
+    // already only advances once the player exists.
+    if (!session?.messages) return null;
     const currentMs = currentTime * 1000;
     let activeId = null;
     for (const msg of session.messages) {
@@ -409,7 +409,6 @@ export default function PostCallReviewScreen() {
   }, [searchQuery, session]);
 
   const startedAt = session?.started_at ? new Date(session.started_at) : null;
-  const endedAt = session?.ended_at ? new Date(session.ended_at) : null;
   const sessionDate = startedAt ? startedAt.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) : 'N/A';
   const sessionDuration = metrics?.total_duration ? `${metrics.total_duration.toFixed(1)}s` : `${session?.duration ? session.duration.toFixed(1) : 0}s`;
   const personaName = session?.persona_name || 'Unknown';

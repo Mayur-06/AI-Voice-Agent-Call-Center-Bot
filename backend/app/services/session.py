@@ -23,7 +23,10 @@ async def _get_default_persona_id() -> str:
     except Exception:
         pass
     try:
-        res = await run_supabase(lambda: client.table("personas").select("id").limit(1).execute())
+        # Ordered so the fallback is at least stable across restarts; an
+        # unordered limit(1) returned whichever row Postgres happened to hand
+        # back first.
+        res = await run_supabase(lambda: client.table("personas").select("id").order("name").limit(1).execute())
         if res.data:
             return res.data[0]["id"]
     except Exception:
@@ -84,22 +87,28 @@ async def save_turn(session_id: str, speaker: str, text: str, sentiment: str | N
                     stt_latency_ms: int | None = None, llm_latency_ms: int | None = None,
                     tts_first_audio_latency_ms: int | None = None,
                     recording_start_ms: int | None = None, recording_end_ms: int | None = None,
-                    message_id: str | None = None):
+                    message_id: str | None = None, sequence_number: int | None = None):
     client = get_supabase()
-    seq = 0
-    try:
-        existing = await run_supabase(
-            lambda: client.table("messages")
-            .select("sequence_number")
-            .eq("session_id", session_id)
-            .order("sequence_number", desc=True)
-            .limit(1)
-            .execute()
-        )
-        if existing.data:
-            seq = existing.data[0]["sequence_number"] + 1
-    except Exception:
-        pass
+    if sequence_number is not None:
+        # Caller tracks the counter in memory. Avoids a SELECT round-trip
+        # before every insert, and the race where two concurrent turns both
+        # read the same max().
+        seq = sequence_number
+    else:
+        seq = 0
+        try:
+            existing = await run_supabase(
+                lambda: client.table("messages")
+                .select("sequence_number")
+                .eq("session_id", session_id)
+                .order("sequence_number", desc=True)
+                .limit(1)
+                .execute()
+            )
+            if existing.data:
+                seq = existing.data[0]["sequence_number"] + 1
+        except Exception:
+            pass
     payload = {
         "session_id": session_id,
         "speaker": speaker,
@@ -177,7 +186,14 @@ async def end_session(session_id: str, recording_url: str | None = None, summary
             else:
                 agent_speaking_time += ms / 1000.0
 
-    latencies = [m["latency_ms"] for m in messages if m.get("latency_ms") is not None]
+    # Only assistant turns carry a response latency. Including user turns -
+    # which were persisted with 0 - halved every average and inflated the
+    # variance used for stream_status.
+    latencies = [
+        m["latency_ms"]
+        for m in messages
+        if m.get("speaker") == "assistant" and m.get("latency_ms")
+    ]
     average_latency = sum(latencies) / len(latencies) if latencies else 0.0
 
     p95_latency = None
@@ -189,11 +205,13 @@ async def end_session(session_id: str, recording_url: str | None = None, summary
     stream_status = "unknown"
     if latencies:
         max_latency = max(latencies)
-        if len(latencies) > 1:
-            std = statistics.stdev(latencies)
-            cv = std / average_latency if average_latency > 0 else 0.0
-        else:
-            cv = 0.0
+        # The coefficient of variation needs a real sample to mean anything.
+        # On a two-turn call it is dominated by the first turn being slower
+        # than the rest (cold connection, plus retrieval), so healthy sub-2s
+        # calls were consistently reported as "degraded".
+        cv = 0.0
+        if len(latencies) >= 4 and average_latency > 0:
+            cv = statistics.stdev(latencies) / average_latency
         if average_latency > 5000 or max_latency > 10000:
             stream_status = "unstable"
         elif cv > 0.5 or max_latency > 5000:

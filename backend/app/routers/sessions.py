@@ -1,6 +1,6 @@
 import asyncio
 from fastapi import APIRouter, HTTPException, status
-from app.models.database import get_supabase
+from app.models.database import get_supabase, run_supabase
 from app.models.schemas import SessionCreate, Session, MessageRequest
 from app.services.llm import generate_response, get_persona_system_prompt
 from app.services.session import create_session, save_turn, load_turns, end_session, resolve_persona_id
@@ -21,7 +21,7 @@ async def create_session_route(data: SessionCreate):
         selected_voice=data.selected_voice,
     )
     supabase = get_supabase()
-    res = supabase.table("sessions").select("*").eq("id", db_session_id).execute()
+    res = await run_supabase(lambda: supabase.table("sessions").select("*").eq("id", db_session_id).execute())
     if not res.data:
         raise HTTPException(status_code=500, detail="Failed to create session")
     return Session(**res.data[0])
@@ -30,25 +30,24 @@ async def create_session_route(data: SessionCreate):
 @router.get("", response_model=List[Session])
 async def list_sessions():
     supabase = get_supabase()
-    sessions_res = supabase.table("sessions").select("*").order("started_at", desc=True).execute()
+    sessions_res = await run_supabase(lambda: supabase.table("sessions").select("*").order("started_at", desc=True).execute())
     sessions = sessions_res.data or []
 
     persona_ids = [str(s.get("persona_id")) for s in sessions if s.get("persona_id")]
     persona_map = {}
     if persona_ids:
-        personas_res = supabase.table("personas").select("id, name").in_("id", persona_ids).execute()
+        personas_res = await run_supabase(lambda: supabase.table("personas").select("id, name").in_("id", persona_ids).execute())
         for p in (personas_res.data or []):
             persona_map[str(p["id"])] = p.get("name", "Unknown")
 
     voice_ids = [s.get("selected_voice") for s in sessions if s.get("selected_voice")]
     voice_map = {}
     if voice_ids:
-        voices_res = supabase.table("voices").select("voice_id, name").in_("voice_id", voice_ids).execute()
+        voices_res = await run_supabase(lambda: supabase.table("voices").select("voice_id, name").in_("voice_id", voice_ids).execute())
         for v in (voices_res.data or []):
             voice_id = v.get("voice_id")
             if not voice_id:
                 continue
-            print(f"Mapping voice_id {voice_id} to name {v.get('name', 'Unknown')}")
             voice_map[str(voice_id)] = v.get("name", "Unknown")
 
     result = []
@@ -63,7 +62,7 @@ async def list_sessions():
 @router.get("/{session_id}")
 async def get_session_details(session_id: str):
     supabase = get_supabase()
-    session_res = supabase.table("sessions").select("*").eq("id", session_id).execute()
+    session_res = await run_supabase(lambda: supabase.table("sessions").select("*").eq("id", session_id).execute())
     if not session_res.data:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
 
@@ -73,21 +72,21 @@ async def get_session_details(session_id: str):
 
     persona_name = None
     if persona_id:
-        persona_res = supabase.table("personas").select("name, domain").eq("id", persona_id).limit(1).execute()
+        persona_res = await run_supabase(lambda: supabase.table("personas").select("name, domain").eq("id", persona_id).limit(1).execute())
         if persona_res.data:
             persona_name = persona_res.data[0].get("name")
             session["persona_domain"] = persona_res.data[0].get("domain")
 
     selected_voice_name = None
     if selected_voice:
-        voice_res = supabase.table("voices").select("name").eq("voice_id", selected_voice).limit(1).execute()
+        voice_res = await run_supabase(lambda: supabase.table("voices").select("name").eq("voice_id", selected_voice).limit(1).execute())
         if voice_res.data:
             selected_voice_name = voice_res.data[0].get("name")
 
     session["persona_name"] = persona_name
     session["selected_voice_name"] = selected_voice_name
 
-    messages_res = supabase.table("messages").select("*").eq("session_id", session_id).order("sequence_number").execute()
+    messages_res = await run_supabase(lambda: supabase.table("messages").select("*").eq("session_id", session_id).order("sequence_number").execute())
     session["messages"] = messages_res.data or []
     return session
 
@@ -95,7 +94,7 @@ async def get_session_details(session_id: str):
 @router.get("/{session_id}/summary")
 async def get_session_summary(session_id: str):
     supabase = get_supabase()
-    session_res = supabase.table("sessions").select("*").eq("id", session_id).execute()
+    session_res = await run_supabase(lambda: supabase.table("sessions").select("*").eq("id", session_id).execute())
     if not session_res.data:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
 
@@ -104,7 +103,7 @@ async def get_session_summary(session_id: str):
     if summary:
         return {"session_id": session_id, "summary": summary}
 
-    messages_res = supabase.table("messages").select("speaker,text").eq("session_id", session_id).order("sequence_number").execute()
+    messages_res = await run_supabase(lambda: supabase.table("messages").select("speaker,text").eq("session_id", session_id).order("sequence_number").execute())
     history = [{"role": m["speaker"], "content": m["text"]} for m in (messages_res.data or [])]
     if not history:
         return {"session_id": session_id, "summary": ""}
@@ -123,15 +122,15 @@ async def get_session_summary(session_id: str):
 async def delete_session(session_id: str):
     await end_session(session_id)
     supabase = get_supabase()
-    supabase.table("messages").delete().eq("session_id", session_id).execute()
-    supabase.table("sessions").delete().eq("id", session_id).execute()
+    await run_supabase(lambda: supabase.table("messages").delete().eq("session_id", session_id).execute())
+    await run_supabase(lambda: supabase.table("sessions").delete().eq("id", session_id).execute())
     return {"status": "deleted"}
 
 
 @router.post("/{session_id}/message")
 async def send_message(session_id: str, data: MessageRequest):
     supabase = get_supabase()
-    session_check = supabase.table("sessions").select("id,persona_id").eq("id", session_id).execute()
+    session_check = await run_supabase(lambda: supabase.table("sessions").select("id,persona_id").eq("id", session_id).execute())
     if not session_check.data:
         raise HTTPException(status_code=404, detail="Session not found")
 

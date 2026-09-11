@@ -1,16 +1,13 @@
 import asyncio
 import json
 import re
-from google import genai
-from google.genai import types
 from app.config import settings
-
-_client = genai.Client(api_key=settings.google_api_key)
+from app.services.llm import get_genai_client
 
 
 async def _call_gemini(prompt: str, model: str | None = None) -> str:
     model_name = model or settings.gemini_model
-    response = await _client.aio.models.generate_content(
+    response = await get_genai_client().aio.models.generate_content(
         model=model_name,
         contents=[prompt],
     )
@@ -18,31 +15,19 @@ async def _call_gemini(prompt: str, model: str | None = None) -> str:
 
 
 async def sentence_splitter_node(state: dict) -> dict:
+    """Split text into sentences.
+
+    This used to call Gemini once per invocation. The streaming LLM loop calls
+    it on every chunk of output, so a response arriving in N chunks cost N
+    extra sequential API round-trips before the first word could be spoken.
+    It is now pure CPU.
+    """
+    from app.services.sentences import split_sentences_sync
+
     text = state.get("text", "").strip()
     if not text:
         return {"text": text, "sentences": []}
-
-    prompt = (
-        "Split the following text into individual sentences. "
-        "Respect semantic boundaries and handle abbreviations, numbers, and quotes correctly. "
-        'Return ONLY a JSON array of strings, nothing else. Example: ["Sentence 1.", "Sentence 2."]\n\n'
-        f"Text: {text}"
-    )
-
-    try:
-        result = await _call_gemini(prompt)
-        cleaned = result.strip()
-        if cleaned.startswith("```"):
-            cleaned = re.sub(r"^```(?:json)?\n?", "", cleaned)
-            cleaned = re.sub(r"\n?```$", "", cleaned)
-        sentences = json.loads(cleaned)
-        if isinstance(sentences, list) and all(isinstance(s, str) for s in sentences):
-            return {"text": text, "sentences": sentences}
-    except Exception:
-        pass
-
-    parts = re.split(r"(?<=[.!?])\s+", text)
-    return {"text": text, "sentences": [part for part in parts if part]}
+    return {"text": text, "sentences": split_sentences_sync(text)}
 
 
 async def sentiment_node(state: dict) -> dict:
@@ -273,19 +258,11 @@ async def chunk_node(state: dict) -> dict:
     if not text:
         return {**state, "chunks": [], "status": "chunked"}
 
-    chunk_size = 500
-    overlap = 50
-    cleaned = re.sub(r"\s+", " ", text).strip()
-    chunks = []
-    start = 0
-    while start < len(cleaned):
-        end = start + chunk_size
-        chunk = cleaned[start:end]
-        if chunk.strip():
-            chunks.append(chunk.strip())
-        start = end - overlap
+    # Shares the upload path's splitter instead of repeating (and drifting
+    # from) the same chunking rules in two places.
+    from app.services.rag import split_text
 
-    return {**state, "chunks": chunks, "status": "chunked"}
+    return {**state, "chunks": split_text(text), "status": "chunked"}
 
 
 async def embed_node(state: dict) -> dict:

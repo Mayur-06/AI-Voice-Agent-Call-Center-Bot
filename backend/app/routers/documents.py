@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, File, UploadFile, Query, HTTPException
-from app.models.database import get_supabase, get_storage_admin
+from app.models.database import get_supabase, get_storage_admin, run_supabase
 from app.services.rag import split_text, generate_embeddings, index_document
 from app.services.storage import upload_document as upload_document_to_storage, ensure_documents_bucket
 from app.services.session import resolve_persona_id
@@ -19,7 +19,7 @@ def _sanitize_text(text: str) -> str:
 @router.get("")
 async def list_documents(persona_id: str = Query(...)):
     supabase = get_supabase()
-    res = supabase.table("documents").select("*").eq("persona_id", persona_id).order("uploaded_at", desc=True).execute()
+    res = await run_supabase(lambda: supabase.table("documents").select("*").eq("persona_id", persona_id).order("uploaded_at", desc=True).execute())
     return res.data or []
 
 
@@ -30,7 +30,7 @@ async def upload_document(
 ):
     resolved_persona_id = await resolve_persona_id(persona_id)
     supabase = get_supabase()
-    persona_check = supabase.table("personas").select("id").eq("id", resolved_persona_id).execute()
+    persona_check = await run_supabase(lambda: supabase.table("personas").select("id").eq("id", resolved_persona_id).execute())
     if not persona_check.data:
         raise HTTPException(status_code=404, detail="Persona not found")
     
@@ -73,7 +73,7 @@ async def upload_document(
         doc_id = str(uuid.uuid4())
         storage_path = await upload_document_to_storage(content_bytes, filename, file_type)
 
-        insert_res = supabase.table("documents").insert({
+        insert_res = await run_supabase(lambda: supabase.table("documents").insert({
             "id": doc_id,
             "persona_id": resolved_persona_id,
             "filename": filename,
@@ -81,7 +81,7 @@ async def upload_document(
             "storage_path": storage_path,
             "status": "uploaded",
             "uploaded_at": datetime.now(timezone.utc).isoformat(),
-        }).execute()
+        }).execute())
 
         await index_document(doc_id, chunks, filename=filename, persona_id=resolved_persona_id)
 

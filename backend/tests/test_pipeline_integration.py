@@ -8,6 +8,7 @@ import asyncio
 from contextlib import suppress
 import pytest
 from unittest.mock import MagicMock, patch, AsyncMock, ANY
+from types import SimpleNamespace
 from fastapi import WebSocket
 from httpx import Response
 from app.websocket.handler import router as ws_router
@@ -187,3 +188,113 @@ async def test_pipeline_stop_call_routed_to_control_queue():
 
 
 
+
+
+# --- Regression: two replies talking over each other -------------------------
+
+
+@pytest.mark.asyncio
+async def test_next_turn_waits_for_previous_playback_to_finish():
+    """A new turn must not begin while the previous one is still speaking.
+
+    Regression: turns were serialised on LLM completion, not on audio
+    completion, so turn 2 started ~1.3s into turn 1 and the caller heard both
+    replies at once.
+    """
+    import time as _time
+    from app.orchestration.stages import _await_playback_finished
+
+    state = SimpleNamespace(is_speaking=True, session_id="s1", vad=None)
+
+    async def _stop_speaking():
+        await asyncio.sleep(0.15)
+        state.is_speaking = False
+
+    started = _time.perf_counter()
+    await asyncio.gather(_await_playback_finished(state), _stop_speaking())
+    waited = _time.perf_counter() - started
+
+    assert state.is_speaking is False
+    assert waited >= 0.15, "should have blocked until playback finished"
+
+
+@pytest.mark.asyncio
+async def test_playback_wait_is_bounded():
+    """A stuck turn must not deadlock the pipeline forever."""
+    from app.orchestration.stages import _await_playback_finished
+
+    state = SimpleNamespace(is_speaking=True, session_id="s1", vad=None)
+    await _await_playback_finished(state, timeout=0.1)
+    assert state.is_speaking is True  # gave up rather than hanging
+
+
+# --- Regression: mic left live while the agent was still audible -------------
+
+
+@pytest.mark.asyncio
+async def test_turn_stays_open_until_speakers_are_quiet():
+    """The server streams a 13s reply in ~2s. The turn must not end when the
+    sending finishes, or the microphone is live for ~11s while the agent is
+    still playing - which made the mic hear the agent, spawn phantom turns and
+    start the next reply on top of the current one.
+    """
+    import time as _time
+    from app.orchestration.stages import _await_speakers_quiet
+
+    state = SimpleNamespace(
+        current_turn_id="t1",
+        session_id="s1",
+        playback_finished=asyncio.Event(),
+        audio_out_queue=asyncio.Queue(),
+        # 300ms of audio still has to play out.
+        audio_playback_deadline=_time.perf_counter() + 0.3,
+    )
+    started = _time.perf_counter()
+    await _await_speakers_quiet(state, "t1")
+    assert _time.perf_counter() - started >= 0.25
+
+
+@pytest.mark.asyncio
+async def test_browser_report_ends_the_turn_early():
+    """If the browser says playback finished, believe it immediately."""
+    import time as _time
+    from app.orchestration.stages import _await_speakers_quiet
+
+    state = SimpleNamespace(
+        current_turn_id="t1",
+        session_id="s1",
+        playback_finished=asyncio.Event(),
+        audio_out_queue=asyncio.Queue(),
+        audio_playback_deadline=_time.perf_counter() + 30,  # backstop far away
+    )
+
+    async def _report():
+        await asyncio.sleep(0.1)
+        state.playback_finished.set()
+
+    started = _time.perf_counter()
+    await asyncio.gather(_await_speakers_quiet(state, "t1"), _report())
+    assert _time.perf_counter() - started < 1.0, "should not wait for the backstop"
+
+
+@pytest.mark.asyncio
+async def test_barge_in_releases_the_playback_wait():
+    """Interrupting must not be blocked by the playback wait."""
+    import time as _time
+    from app.orchestration.stages import _await_speakers_quiet
+
+    state = SimpleNamespace(
+        current_turn_id="t1",
+        session_id="s1",
+        playback_finished=asyncio.Event(),
+        audio_out_queue=asyncio.Queue(),
+        audio_playback_deadline=_time.perf_counter() + 30,
+    )
+
+    async def _barge_in():
+        await asyncio.sleep(0.1)
+        state.current_turn_id = None
+
+    started = _time.perf_counter()
+    await asyncio.gather(_await_speakers_quiet(state, "t1"), _barge_in())
+    assert _time.perf_counter() - started < 1.0

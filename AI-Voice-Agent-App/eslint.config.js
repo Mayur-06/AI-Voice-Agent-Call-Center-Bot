@@ -18,4 +18,12 @@ export default defineConfig([
       parserOptions: { ecmaFeatures: { jsx: true } },
     },
   },
+  {
+    // shadcn/ui primitives deliberately export their `cva` variant objects
+    // (buttonVariants, badgeVariants, ...) alongside the component. That is the
+    // upstream file layout, and the rule only affects Vite fast refresh in
+    // development, so it is not worth splitting every generated file.
+    files: ['src/components/ui/**/*.{js,jsx}'],
+    rules: { 'react-refresh/only-export-components': 'off' },
+  },
 ])

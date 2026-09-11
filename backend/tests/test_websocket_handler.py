@@ -129,7 +129,7 @@ async def test_websocket_transcript_message():
          patch("app.orchestration.stages.retrieve_relevant_chunks", new_callable=AsyncMock) as mock_retrieve, \
          patch("app.orchestration.stages.generate_response_stream") as mock_generate_stream, \
          patch("app.orchestration.stages.synthesize_speech_stream") as mock_tts_stream, \
-         patch("app.orchestration.stages.get_persona_system_prompt", new_callable=AsyncMock) as mock_get_prompt, \
+         patch("app.websocket.handler.get_persona_system_prompt", new_callable=AsyncMock) as mock_get_prompt, \
          patch("app.websocket.handler.get_persona_voice_id", new_callable=AsyncMock) as mock_get_voice, \
          patch("app.websocket.handler._get_default_persona_id", new_callable=AsyncMock) as mock_get_default_persona, \
          patch("app.websocket.handler._load_session", new_callable=AsyncMock) as mock_load_session:

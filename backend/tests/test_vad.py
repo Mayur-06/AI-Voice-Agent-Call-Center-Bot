@@ -41,15 +41,21 @@ def test_vad_reset(vad_buffer):
     assert len(vad_buffer.buffer) == 0
 
 
+def _content_aware_is_speech(frame: bytes) -> bool:
+    """Treat an all-zero frame as silence, anything else as speech."""
+    return any(frame)
+
+
 def test_vad_full_turn_boundary_speech_then_silence(vad_buffer):
-    vad_buffer._is_speech = lambda frame: True
+    vad_buffer._is_speech = _content_aware_is_speech
     vad_buffer.frame_duration_ms = 30
 
     import app.services.vad as vad_module
     vad_module.settings.silence_threshold_ms = 128
 
     try:
-        speech_frames = [_make_frame(True, 960) for _ in range(4)]
+        # 12 frames = 360ms of voice, above MIN_SPEECH_MS.
+        speech_frames = [_make_frame(True, 960) for _ in range(12)]
         silence_frames = [_make_frame(False, 960) for _ in range(10)]
 
         result = None
@@ -63,7 +69,11 @@ def test_vad_full_turn_boundary_speech_then_silence(vad_buffer):
                 break
 
         assert result is not None
-        assert len(result) == 4 * 960
+        # Audio handed to STT is contiguous: the 4 voiced frames plus the
+        # trailing silence that closed the turn. It is NOT spliced down to
+        # voiced frames only, which would mangle the audio for Whisper.
+        assert len(result) >= 12 * 960
+        assert len(result) % 960 == 0
         assert triggered is True
         assert onset is not None
         assert end is not None
@@ -72,7 +82,7 @@ def test_vad_full_turn_boundary_speech_then_silence(vad_buffer):
 
 
 def test_vad_ignores_short_silence(vad_buffer):
-    vad_buffer._is_speech = lambda frame: True
+    vad_buffer._is_speech = _content_aware_is_speech
     vad_buffer.frame_duration_ms = 30
 
     import app.services.vad as vad_module
@@ -80,9 +90,9 @@ def test_vad_ignores_short_silence(vad_buffer):
     vad_module.settings.silence_threshold_ms = 200
 
     try:
-        speech_frames = [_make_frame(True) for _ in range(3)]
-        short_silence = [_make_frame(False) for _ in range(2)]
-        resume_speech = [_make_frame(True) for _ in range(2)]
+        speech_frames = [_make_frame(True, 960) for _ in range(3)]
+        short_silence = [_make_frame(False, 960) for _ in range(2)]
+        resume_speech = [_make_frame(True, 960) for _ in range(2)]
 
         for f in speech_frames:
             vad_buffer.process(f)
@@ -128,16 +138,237 @@ def test_vad_flush_empty_returns_none(vad_buffer):
 
 
 def test_vad_process_bytes_accumulates(vad_buffer):
-    vad_buffer._is_speech = lambda frame: True
+    vad_buffer._is_speech = _content_aware_is_speech
     vad_buffer.frame_duration_ms = 30
 
     import app.services.vad as vad_module
     vad_module.settings.silence_threshold_ms = 128
 
     try:
-        data = b"".join([_make_frame(True, 960) for _ in range(4)] + [_make_frame(False, 960) for _ in range(10)])
+        data = b"".join([_make_frame(True, 960) for _ in range(12)] + [_make_frame(False, 960) for _ in range(10)])
         result, triggered, onset, end = vad_buffer.process_bytes(data, frame_size=960)
         assert result is not None
-        assert len(result) == 4 * 960
+        assert len(result) >= 12 * 960
+    finally:
+        vad_module.settings.silence_threshold_ms = 800
+
+
+# --- Regression tests for the endpointing bugs -------------------------------
+
+
+def test_vad_does_not_end_turn_on_cumulative_internal_pauses(vad_buffer):
+    """A speaker pausing between words must not end the turn.
+
+    The old implementation computed silence as
+    ``len(buffer) - len(speech_frames)``, i.e. the *cumulative* count of
+    unvoiced frames anywhere in the utterance rather than the consecutive
+    trailing run. Normal speech has 50-150 ms gaps between words, so after
+    roughly six to ten of them the turn was cut off mid-sentence while the
+    user was still talking.
+    """
+    vad_buffer._is_speech = _content_aware_is_speech
+    vad_buffer.frame_duration_ms = 30
+
+    import app.services.vad as vad_module
+    original = vad_module.settings.silence_threshold_ms
+    vad_module.settings.silence_threshold_ms = 300  # 10 frames of 30 ms
+
+    try:
+        # "word <pause> word <pause> ..." - 20 short gaps, none long enough
+        # to be an endpoint, but 60 unvoiced frames in total (1800 ms), far
+        # past the threshold when counted cumulatively.
+        for _ in range(20):
+            for _ in range(4):
+                result, ended, _, _ = vad_buffer.process(_make_frame(True, 960))
+                assert result is None, "voiced frame must not end the turn"
+            for _ in range(3):  # 90 ms gap - a normal inter-word pause
+                result, ended, _, _ = vad_buffer.process(_make_frame(False, 960))
+                assert result is None, "an inter-word pause must not end the turn"
+
+        assert vad_buffer.triggered is True, "turn was cut off mid-sentence"
+
+        # Now a genuine trailing pause should close it.
+        result = None
+        for _ in range(12):
+            result, ended, _, _ = vad_buffer.process(_make_frame(False, 960))
+            if result is not None:
+                break
+        assert result is not None, "a real trailing silence must end the turn"
+        assert vad_buffer.triggered is False
+    finally:
+        vad_module.settings.silence_threshold_ms = original
+
+
+def test_vad_trailing_silence_resets_on_speech(vad_buffer):
+    vad_buffer._is_speech = _content_aware_is_speech
+    vad_buffer.frame_duration_ms = 30
+
+    import app.services.vad as vad_module
+    original = vad_module.settings.silence_threshold_ms
+    vad_module.settings.silence_threshold_ms = 150  # 5 frames
+
+    try:
+        vad_buffer.process(_make_frame(True, 960))
+        for _ in range(4):  # 120 ms - just under the threshold
+            vad_buffer.process(_make_frame(False, 960))
+        vad_buffer.process(_make_frame(True, 960))  # speech resumes
+        assert vad_buffer._trailing_silence_ms == 0
+        assert vad_buffer.triggered is True
+    finally:
+        vad_module.settings.silence_threshold_ms = original
+
+
+def test_vad_includes_pre_roll_so_word_onset_is_not_clipped(vad_buffer):
+    """WebRTC VAD misses the first 30-90 ms of soft consonants.
+
+    Without pre-roll, "fifty" reaches Whisper as "ifty".
+    """
+    vad_buffer._is_speech = _content_aware_is_speech
+    vad_buffer.frame_duration_ms = 30
+
+    # Three frames of near-silence arrive before VAD trips.
+    for _ in range(3):
+        vad_buffer.process(_make_frame(False, 960))
+    assert vad_buffer.triggered is False
+
+    vad_buffer.process(_make_frame(True, 960))
+    assert vad_buffer.triggered is True
+
+    audio = vad_buffer.flush()
+    assert audio is not None
+    # Pre-roll frames are prepended, so more than just the triggering frame.
+    assert len(audio) > 960, "speech onset was clipped - no pre-roll retained"
+    assert len(audio) == 4 * 960
+
+
+def test_vad_audio_is_contiguous_not_spliced(vad_buffer):
+    """Internal silence must be preserved in the audio sent to STT.
+
+    The old code joined ``speech_frames`` only, splicing out every pause and
+    gluing words together at hard boundaries.
+    """
+    vad_buffer._is_speech = _content_aware_is_speech
+    vad_buffer.frame_duration_ms = 30
+
+    import app.services.vad as vad_module
+    original = vad_module.settings.silence_threshold_ms
+    vad_module.settings.silence_threshold_ms = 300
+
+    try:
+        vad_buffer.process(_make_frame(True, 960))
+        vad_buffer.process(_make_frame(False, 960))  # internal pause
+        vad_buffer.process(_make_frame(True, 960))
+        audio = vad_buffer.flush()
+        assert audio is not None
+        assert len(audio) == 3 * 960, "internal pause was spliced out"
+        # The middle frame is still silent in the output.
+        assert audio[960:1920] == b"\x00" * 960
+    finally:
+        vad_module.settings.silence_threshold_ms = original
+
+
+def test_vad_discards_utterance_with_too_little_voiced_audio(vad_buffer):
+    """A blip of room tone must not become an utterance.
+
+    Regression: a single voiced frame started a turn, so Whisper was handed a
+    clip that was almost all silence and answered with a stock hallucination
+    ("Thank you.", "So") that the agent then replied to.
+    """
+    vad_buffer._is_speech = _content_aware_is_speech
+    vad_buffer.frame_duration_ms = 30
+
+    import app.services.vad as vad_module
+    vad_module.settings.silence_threshold_ms = 128
+    try:
+        # 2 voiced frames = 60ms, well under MIN_SPEECH_MS.
+        for f in [_make_frame(True, 960) for _ in range(2)]:
+            assert vad_buffer.process(f)[0] is None
+        emitted = None
+        for f in [_make_frame(False, 960) for _ in range(10)]:
+            result, triggered, _, _ = vad_buffer.process(f)
+            if result is not None:
+                emitted = result
+        assert emitted is None, "a 60ms blip must not be sent to STT"
+        assert vad_buffer.last_voiced_ms < vad_module.MIN_SPEECH_MS
+    finally:
+        vad_module.settings.silence_threshold_ms = 800
+
+
+def test_vad_muted_does_not_trigger_on_agent_echo(vad_buffer):
+    """While the agent speaks, its own voice leaking into the mic must not
+    start an utterance - that produced 13-second self-recordings."""
+    vad_buffer._is_speech = _content_aware_is_speech
+    vad_buffer.frame_duration_ms = 30
+    vad_buffer.muted = True
+
+    for f in [_make_frame(True, 960) for _ in range(20)]:
+        result, triggered, _, _ = vad_buffer.process(f)
+        assert result is None
+        assert triggered is False
+    assert vad_buffer.triggered is False, "echo must not trigger the VAD"
+
+    # Unmuting lets a genuine interruption through, with pre-roll retained.
+    vad_buffer.muted = False
+    vad_buffer.process(_make_frame(True, 960))
+    assert vad_buffer.triggered is True
+    assert len(vad_buffer.buffer) > 1, "pre-roll should survive the muted period"
+
+
+def test_vad_energy_gate_rejects_room_noise(vad_buffer):
+    """WebRTC's VAD labels room tone as speech, and Whisper answers room tone
+    with confident fabrications - given pure silence it returns "Thank you."
+    with the same avg_logprob as real speech. Raw energy is the only signal
+    that actually separates them.
+    """
+    import numpy as np
+    import app.services.vad as vad_module
+
+    rng = np.random.default_rng(11)
+    vad_buffer._is_speech = lambda frame: True  # worst case: VAD says "speech"
+    vad_buffer.frame_duration_ms = 30
+    vad_module.settings.silence_threshold_ms = 128
+    try:
+        noise = rng.normal(0, 400, 16000).astype("<i2").tobytes()  # loud room noise
+        emitted = []
+        for o in range(0, len(noise) - 960, 960):
+            r = vad_buffer.process(noise[o:o + 960])
+            if r[0]:
+                emitted.append(r[0])
+        vad_buffer._is_speech = lambda frame: False
+        for _ in range(20):
+            r = vad_buffer.process(b"\x00" * 960)
+            if r[0]:
+                emitted.append(r[0])
+        assert emitted == [], "room noise must never reach the transcriber"
+        assert vad_buffer.last_voiced_rms < vad_module.MIN_SPEECH_RMS
+    finally:
+        vad_module.settings.silence_threshold_ms = 800
+
+
+def test_vad_energy_gate_passes_quiet_speech():
+    """The gate must not shut out a softly spoken caller."""
+    import numpy as np
+    import app.services.vad as vad_module
+    from app.services.vad import VADBuffer
+
+    v = VADBuffer(16000)
+    v._is_speech = lambda frame: True
+    v.frame_duration_ms = 30
+    vad_module.settings.silence_threshold_ms = 128
+    try:
+        rng = np.random.default_rng(12)
+        # ~700 RMS: quieter than normal speech, far above room noise.
+        quiet = rng.normal(0, 700, 32000).astype("<i2").tobytes()
+        emitted = []
+        for o in range(0, len(quiet) - 960, 960):
+            r = v.process(quiet[o:o + 960])
+            if r[0]:
+                emitted.append(r[0])
+        v._is_speech = lambda frame: False
+        for _ in range(20):
+            r = v.process(b"\x00" * 960)
+            if r[0]:
+                emitted.append(r[0])
+        assert emitted, "quiet speech must still be transcribed"
     finally:
         vad_module.settings.silence_threshold_ms = 800

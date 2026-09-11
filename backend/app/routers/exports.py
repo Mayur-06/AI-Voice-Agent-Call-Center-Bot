@@ -10,7 +10,7 @@ try:
 except ImportError:  # pragma: no cover - optional dependency for MP3 export
     AudioSegment = None
 
-from app.models.database import get_supabase, get_supabase_admin
+from app.models.database import get_supabase, get_supabase_admin, run_supabase
 from app.services.call_summarizer import generate_call_summary
 from typing import List
 
@@ -27,6 +27,42 @@ def _validate_recording_format(fmt: str) -> None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="format must be mp3 or wav")
 
 
+_SUMMARY_LABELS = [
+    ("key_topics", "Key topics"),
+    ("decisions_made", "Decisions made"),
+    ("action_items", "Action items"),
+    ("dialogue_flow", "Dialogue flow"),
+    ("resolution_status", "Resolution status"),
+    ("sentiment_overview", "Sentiment overview"),
+]
+
+
+def _summary_sections(summary: str) -> list[tuple[str, str]]:
+    """Render the stored summary as headed prose.
+
+    The summary is persisted as a JSON blob. Writing it into the PDF verbatim
+    handed the reader a wall of raw JSON, which is not a deliverable.
+    """
+    try:
+        parsed = json.loads(summary or "")
+    except (ValueError, TypeError):
+        return [("Summary", summary or "No summary available.")]
+    if not isinstance(parsed, dict):
+        return [("Summary", str(parsed))]
+
+    sections = []
+    for key, label in _SUMMARY_LABELS:
+        value = parsed.get(key)
+        if not value:
+            continue
+        if isinstance(value, list):
+            body = "\n".join(f"- {item}" for item in value)
+        else:
+            body = str(value)
+        sections.append((label, body))
+    return sections or [("Summary", "No summary available.")]
+
+
 def _validate_summary_format(fmt: str) -> None:
     if fmt not in ("txt", "json", "pdf"):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="format must be txt, json, or pdf")
@@ -36,11 +72,11 @@ def _validate_summary_format(fmt: str) -> None:
 async def export_transcript(session_id: str, format: str = "json"):
     _validate_transcript_format(format)
     supabase = get_supabase()
-    session_res = supabase.table("sessions").select("id").eq("id", session_id).execute()
+    session_res = await run_supabase(lambda: supabase.table("sessions").select("id").eq("id", session_id).execute())
     if not session_res.data:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
 
-    res = supabase.table("messages").select("*").eq("session_id", session_id).order("sequence_number").execute()
+    res = await run_supabase(lambda: supabase.table("messages").select("*").eq("session_id", session_id).order("sequence_number").execute())
     messages = res.data or []
 
     if format == "txt":
@@ -59,7 +95,7 @@ async def export_transcript(session_id: str, format: str = "json"):
 async def export_recording(session_id: str, format: str = "wav"):
     _validate_recording_format(format)
     supabase = get_supabase()
-    session_res = supabase.table("sessions").select("*").eq("id", session_id).execute()
+    session_res = await run_supabase(lambda: supabase.table("sessions").select("*").eq("id", session_id).execute())
     if not session_res.data:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
 
@@ -103,14 +139,14 @@ async def export_recording(session_id: str, format: str = "wav"):
 async def export_summary(session_id: str, format: str = "pdf"):
     _validate_summary_format(format)
     supabase = get_supabase()
-    session_res = supabase.table("sessions").select("*").eq("id", session_id).execute()
+    session_res = await run_supabase(lambda: supabase.table("sessions").select("*").eq("id", session_id).execute())
     if not session_res.data:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
 
     session = session_res.data[0]
     summary = session.get("summary")
     if not summary:
-        messages_res = supabase.table("messages").select("speaker,text").eq("session_id", session_id).order("sequence_number").execute()
+        messages_res = await run_supabase(lambda: supabase.table("messages").select("speaker,text").eq("session_id", session_id).order("sequence_number").execute())
         history = [{"role": m["speaker"], "content": m["text"]} for m in (messages_res.data or [])]
         if history:
             try:
@@ -128,13 +164,27 @@ async def export_summary(session_id: str, format: str = "pdf"):
     if format == "pdf":
         try:
             from fpdf import FPDF
+            from fpdf.enums import XPos, YPos
+            # multi_cell(w=0) means "out to the right margin", so the cursor
+            # must be returned to the left margin after each block or the next
+            # call has zero width and fpdf raises.
+            wrap = {"new_x": XPos.LMARGIN, "new_y": YPos.NEXT}
             pdf = FPDF()
             pdf.add_page()
-            pdf.set_font("Helvetica", size=12)
-            pdf.cell(0, 10, f"Call Summary - Session {session_id}", ln=True)
+            pdf.set_font("Helvetica", "B", 14)
+            pdf.multi_cell(0, 10, f"Call Summary - Session {session_id}", **wrap)
             pdf.ln(2)
-            pdf.multi_cell(0, 8, summary or "")
-            pdf_bytes = pdf.output()
+            for heading, body in _summary_sections(summary):
+                pdf.set_font("Helvetica", "B", 12)
+                pdf.multi_cell(0, 8, heading, **wrap)
+                pdf.set_font("Helvetica", size=11)
+                # Helvetica is latin-1 only in fpdf2; a stray unicode character
+                # in a transcript would otherwise abort the whole export.
+                pdf.multi_cell(0, 7, body.encode("latin-1", "replace").decode("latin-1"), **wrap)
+                pdf.ln(2)
+            # fpdf2 returns a bytearray, which Starlette's Response cannot
+            # render - it produced a 500 on every PDF export.
+            pdf_bytes = bytes(pdf.output())
             return Response(content=pdf_bytes, media_type="application/pdf", headers={"Content-Disposition": f"attachment; filename={session_id}_summary.pdf"})
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"PDF generation failed: {exc}") from exc

@@ -4,11 +4,14 @@ av>=12.0.0
 edge-tts>=7.2.8
 fastapi>=0.100.0
 fpdf2>=2.7.0
+numpy>=1.24.0
 fastembed>=0.7.0
 google-genai>=1.0.0
 httpx>=0.24.0
 langgraph>=0.2.0
 pinecone>=9.0.0
+# alembic/env.py rewrites the async URL to psycopg2 to run migrations.
+psycopg2-binary>=2.9.0
 pydantic-settings>=2.0.0
 pydub>=0.25.1
 python-multipart>=0.0.6

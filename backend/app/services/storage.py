@@ -40,7 +40,12 @@ async def upload_recording(file_bytes: bytes, session_id: str, content_type: str
     storage = get_storage_admin()
 
     def _do_upload():
-        storage.from_("recordings").upload(storage_path, file_bytes, {"content-type": content_type})
+        # upsert: without it a session whose recording is saved twice (a
+        # reconnect, or a re-run) fails with 409 Duplicate and the recording
+        # URL is silently lost.
+        storage.from_("recordings").upload(
+            storage_path, file_bytes, {"content-type": content_type, "upsert": "true"}
+        )
 
     loop = asyncio.get_running_loop()
     await loop.run_in_executor(None, _do_upload)

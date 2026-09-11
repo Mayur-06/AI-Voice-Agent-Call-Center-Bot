@@ -72,18 +72,26 @@ def get_logs(session_id: str) -> list[dict]:
 
 
 async def stream_logs(session_id: str):
+    """Stream session log entries as SSE, each entry exactly once.
+
+    The previous version re-yielded the entire backlog on every new entry, so a
+    consumer saw entry N repeated N times and the stream grew quadratically.
+    """
     ev = asyncio.Event()
     session_log_events.setdefault(session_id, []).append(ev)
+    cursor = 0
     try:
-        for entry in get_logs(session_id):
-            yield f"data: {json.dumps(entry)}\n\n"
         while True:
+            entries = get_logs(session_id)
+            for entry in entries[cursor:]:
+                yield f"data: {json.dumps(entry)}\n\n"
+            cursor = len(entries)
             await ev.wait()
             ev.clear()
-            for entry in get_logs(session_id)[:]:
-                yield f"data: {json.dumps(entry)}\n\n"
     finally:
-        session_log_events.get(session_id, []).remove(ev)
+        listeners = session_log_events.get(session_id, [])
+        if ev in listeners:
+            listeners.remove(ev)
 
 
 async def close_session(session_id: str) -> None:

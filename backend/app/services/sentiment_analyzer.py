@@ -12,6 +12,18 @@ async def save_sentiment(session_id: str, message_id: str, sentiment: str) -> No
     score_map = {"positive": 1.0, "neutral": 0.0, "negative": -0.5, "frustrated": -1.0}
     score = score_map.get(sentiment, 0.0)
     client = get_supabase()
+    # The message row is written before analysis finishes, so its sentiment
+    # column stayed NULL forever. end_session() and the analytics dashboard
+    # both read sentiment from messages, so both reported nothing.
+    try:
+        await run_supabase(
+            lambda: client.table("messages")
+            .update({"sentiment": sentiment})
+            .eq("id", message_id)
+            .execute()
+        )
+    except Exception:
+        pass
     try:
         await run_supabase(
             lambda: client.table("sentiment_records").insert({

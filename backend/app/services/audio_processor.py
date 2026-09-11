@@ -1,11 +1,67 @@
 import io
-import os
+import queue
 import struct
 import av
+import numpy as np
 
 
 def _open_container(audio_bytes: bytes):
     return av.open(io.BytesIO(audio_bytes))
+
+
+class QueueReader(io.RawIOBase):
+    """File-like adapter so PyAV can decode an MP3 that is still arriving.
+
+    Deliberately does NOT implement seek(): PyAV then treats the source as a
+    non-seekable stream and decodes progressively instead of probing the whole
+    file first.
+    """
+
+    def __init__(self, chunk_queue: "queue.Queue[bytes | None]"):
+        self._queue = chunk_queue
+        self._buf = b""
+        self._eof = False
+
+    def readable(self) -> bool:
+        return True
+
+    def readinto(self, target) -> int:
+        wanted = len(target)
+        while len(self._buf) < wanted and not self._eof:
+            chunk = self._queue.get()
+            if chunk is None:
+                self._eof = True
+                break
+            self._buf += chunk
+        take = min(wanted, len(self._buf))
+        target[:take] = self._buf[:take]
+        self._buf = self._buf[take:]
+        return take
+
+
+def iter_pcm_from_stream(reader, sample_rate: int = 16000, min_chunk_bytes: int = 3200):
+    """Decode a streaming audio source to mono s16 PCM, yielding as it goes."""
+    container = av.open(reader)
+    try:
+        stream = next((s for s in container.streams if s.type == "audio"), None)
+        if stream is None:
+            raise RuntimeError("No audio stream found in container")
+        resampler = av.AudioResampler(format="s16", layout="mono", rate=sample_rate)
+        pending = bytearray()
+        for packet in container.demux(stream):
+            for frame in packet.decode():
+                resampled = resampler.resample(frame)
+                frames = resampled if isinstance(resampled, list) else [resampled]
+                for f in frames:
+                    if f is not None:
+                        pending.extend(f.to_ndarray().tobytes())
+                if len(pending) >= min_chunk_bytes:
+                    yield bytes(pending)
+                    pending.clear()
+        if pending:
+            yield bytes(pending)
+    finally:
+        container.close()
 
 
 def decode_to_pcm(audio_bytes: bytes, sample_rate: int = 16000) -> bytes:
@@ -85,6 +141,26 @@ def pcm_to_wav(pcm_bytes: bytes, sample_rate: int = 16000, channels: int = 1, sa
     return header + pcm_bytes
 
 
+def strip_wav_header(data: bytes) -> bytes:
+    """Return the PCM payload of a WAV, or the input if it is already raw.
+
+    TTS chunks arrive as complete WAVs. Appending them straight into the
+    recording buffer embedded a 44-byte RIFF header as audio, producing an
+    audible click at every chunk boundary in the saved call.
+    """
+    if len(data) < 12 or data[:4] != b"RIFF" or data[8:12] != b"WAVE":
+        return data
+    pos = 12
+    while pos + 8 <= len(data):
+        chunk_id = data[pos:pos + 4]
+        size = int.from_bytes(data[pos + 4:pos + 8], "little")
+        pos += 8
+        if chunk_id == b"data":
+            return data[pos:pos + size] if size else data[pos:]
+        pos += size + (size & 1)
+    return b""
+
+
 def get_duration_ms(audio_bytes: bytes) -> int:
     try:
         container = _open_container(audio_bytes)
@@ -124,7 +200,6 @@ def compose_call_recording(user_pcm: bytes, ai_segments: list[dict], sample_rate
         return pcm_to_wav(bytes(combined), sample_rate=sample_rate)
 
     user_duration_ms = _pcm_duration_ms(user_pcm, sample_rate=sample_rate)
-    user_samples = len(user_pcm) // 2
     total_user_ms = user_duration_ms
 
     timeline: list[tuple[int, bytes, str]] = []
@@ -147,25 +222,36 @@ def compose_call_recording(user_pcm: bytes, ai_segments: list[dict], sample_rate
     if total_samples <= 0:
         return pcm_to_wav(user_pcm, sample_rate=sample_rate)
 
-    mixed = bytearray(total_samples)
-    for offset_ms, pcm, speaker in timeline:
-        offset_samples = int((offset_ms / 1000.0) * sample_rate) * 2
-        if offset_samples < 0 or offset_samples >= len(mixed):
+    # Sum into int32 then clip, so overlapping speakers mix instead of one
+    # erasing the other. The previous per-sample Python loop assigned rather
+    # than added, and ran ~4.8M iterations for a five-minute call.
+    total_frames = total_samples // 2
+    accumulator = np.zeros(total_frames, dtype=np.int32)
+    for offset_ms, pcm, _speaker in timeline:
+        if not pcm:
             continue
-        for i in range(0, len(pcm), 2):
-            idx = offset_samples + i
-            if idx >= len(mixed):
-                break
-            sample = int.from_bytes(pcm[i:i+2], byteorder="little", signed=True)
-            mixed[idx] = sample & 0xFF
-            mixed[idx+1] = (sample >> 8) & 0xFF
+        samples = np.frombuffer(pcm[: len(pcm) - (len(pcm) % 2)], dtype="<i2")
+        start = int((offset_ms / 1000.0) * sample_rate)
+        if start < 0 or start >= total_frames:
+            continue
+        end = min(start + samples.size, total_frames)
+        if end > start:
+            accumulator[start:end] += samples[: end - start]
 
-    return pcm_to_wav(bytes(mixed), sample_rate=sample_rate)
+    mixed = np.clip(accumulator, -32768, 32767).astype("<i2").tobytes()
+    return pcm_to_wav(mixed, sample_rate=sample_rate)
 
 
 async def save_session_recording(session_id: str, audio_buffer: bytes):
     try:
-        wav_bytes = pcm_to_wav(audio_buffer)
+        # compose_call_recording() already returns a complete WAV. Wrapping it
+        # again embedded a second 44-byte RIFF header inside the audio data,
+        # producing an audible click at the start of every saved call and a
+        # file whose declared sizes did not match its contents.
+        if audio_buffer[:4] == b"RIFF" and audio_buffer[8:12] == b"WAVE":
+            wav_bytes = audio_buffer
+        else:
+            wav_bytes = pcm_to_wav(audio_buffer)
     except Exception as exc:
         raise RuntimeError(f"Failed to encode session recording to WAV: {exc}") from exc
 

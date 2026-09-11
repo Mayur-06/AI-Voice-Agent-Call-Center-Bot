@@ -2,35 +2,18 @@ import { useEffect, useRef, useCallback } from 'react';
 import { WS_URL, AUDIO_CHUNK_INTERVAL_MS, API_BASE } from '@/store/callStore';
 import { apiFetch } from '@/config';
 import useCallStore from '@/store/callStore';
+import { createGaplessPlayer } from '@/audio/gaplessPlayer';
 
 const TARGET_SAMPLE_RATE = 16000;
-// Silero VAD requires exactly 512 samples (1024 bytes) per frame at 16kHz
-const VAD_FRAME_BYTES = 1024;
-
-function downMixAndResample(inputBuffer, outputSampleRate) {
-  const inputSampleRate = inputBuffer.sampleRate;
-  const inputData = inputBuffer.getChannelData(0);
-  const ratio = inputSampleRate / outputSampleRate;
-  const outputLength = Math.floor(inputData.length / ratio);
-  const output = new Int16Array(outputLength);
-
-  for (let i = 0; i < outputLength; i++) {
-    const srcIndex = Math.floor(i * ratio);
-    const sample = Math.max(-1, Math.min(1, inputData[srcIndex] != null ? inputData[srcIndex] : 0));
-    output[i] = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
-  }
-
-  return output;
-}
-
-function encodePcmChunk(int16Array) {
-  const buffer = new Uint8Array(int16Array.byteLength);
-  const view = new DataView(buffer.buffer);
-  for (let i = 0; i < int16Array.length; i++) {
-    view.setInt16(i * 2, int16Array[i], true);
-  }
-  return buffer;
-}
+// Speech loud enough to treat as the user interrupting the agent.
+const BARGE_IN_PEAK_THRESHOLD = 0.06;
+// Consecutive loud 20 ms frames required before we call it speech, so a cough
+// or a key press does not cut the agent off.
+const BARGE_IN_FRAMES = 5;
+// Served as a real file rather than bundled: Vite inlines small assets as
+// data: URLs, and addModule() rejects those under a strict CSP and in some
+// browsers.
+const PCM_WORKLET_URL = `${import.meta.env.BASE_URL || '/'}pcm-worklet.js`;
 
 export function useVoiceCall() {
   const status = useCallStore((s) => s.status);
@@ -44,7 +27,6 @@ export function useVoiceCall() {
   const ragActive = useCallStore((s) => s.ragActive);
   const latencies = useCallStore((s) => s.latencies);
   const mediaStream = useCallStore((s) => s.mediaStream);
-  const audioContext = useCallStore((s) => s.audioContext);
   const filler = useCallStore((s) => s.filler);
 
   const setStatus = useCallStore((s) => s.setStatus);
@@ -64,12 +46,14 @@ export function useVoiceCall() {
   const updateLastTranscriptEntry = useCallStore((s) => s.updateLastTranscriptEntry);
 
   const wsRef = useRef(null);
-  const processorRef = useRef(null);
+  const workletNodeRef = useRef(null);
+  const captureCtxRef = useRef(null);
   const chunkIntervalRef = useRef(null);
-  const ttsQueueRef = useRef([]);
-  const isPlayingTtsRef = useRef(false);
+  const pendingFramesRef = useRef([]);
   const ttsCtxRef = useRef(null);
-  const currentTtsSourceRef = useRef(null);
+  const playerRef = useRef(null);
+  const bargeInFramesRef = useRef(0);
+  const messageHandlerRef = useRef(null);
   const reconnectAttemptsRef = useRef(0);
   const stopCallRef = useRef(null);
   const connectingRef = useRef(false);
@@ -77,56 +61,85 @@ export function useVoiceCall() {
   const mutedRef = useRef(muted);
   const analyserRef = useRef(null);
   const connectWebSocketRef = useRef(null);
-  const playNextTtsChunkRef = useRef(null);
+  const playbackIdleTimerRef = useRef(null);
+  const lastPlaybackSentRef = useRef(null);
+  // Serialises decodeAudioData so chunks are scheduled in the order they
+  // arrived, not the order the decoder happened to finish them.
+  const decodeChainRef = useRef(Promise.resolve());
+  const playbackGenerationRef = useRef(0);
 
   useEffect(() => {
     mutedRef.current = muted;
+    if (workletNodeRef.current) {
+      workletNodeRef.current.port.postMessage({ muted });
+    }
   }, [muted]);
 
-  function playNextTtsChunk() {
-    const ctx = ttsCtxRef.current || audioContext;
-    if (!ctx || ttsQueueRef.current.length === 0) {
-      isPlayingTtsRef.current = false;
-      currentTtsSourceRef.current = null;
-      if (ttsQueueRef.current.length === 0) {
-        setStatus('idle');
+  // Debounced so a brief dip between arriving chunks is not reported as the
+  // end of playback.
+  const reportPlaybackState = useCallback((isPlaying) => {
+    const send = (playing) => {
+      const ws = wsRef.current;
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      if (lastPlaybackSentRef.current === playing) return;
+      lastPlaybackSentRef.current = playing;
+      try {
+        ws.send(JSON.stringify({ type: 'playback_state', playing }));
+      } catch {
+        // Socket going away; the server's time-based backstop covers this.
       }
+    };
+
+    if (playbackIdleTimerRef.current) {
+      clearTimeout(playbackIdleTimerRef.current);
+      playbackIdleTimerRef.current = null;
+    }
+    if (isPlaying) {
+      send(true);
       return;
     }
+    playbackIdleTimerRef.current = setTimeout(() => {
+      playbackIdleTimerRef.current = null;
+      if (!(playerRef.current && playerRef.current.isPlaying)) send(false);
+    }, 250);
+  }, []);
 
-    isPlayingTtsRef.current = true;
-    setStatus('speaking');
-
-    const buffer = ttsQueueRef.current.shift();
-    const source = ctx.createBufferSource();
-    source.buffer = buffer;
-    source.connect(ctx.destination);
-    currentTtsSourceRef.current = source;
-    source.onended = () => {
-      if (currentTtsSourceRef.current === source) {
-        currentTtsSourceRef.current = null;
-      }
-      playNextTtsChunk();
-    };
-    source.start();
-  }
-
-  useEffect(() => {
-    playNextTtsChunkRef.current = playNextTtsChunk;
-  });
+  const ensurePlaybackContext = useCallback(() => {
+    let ctx = ttsCtxRef.current;
+    if (!ctx || ctx.state === 'closed') {
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContextClass) return null;
+      ctx = new AudioContextClass();
+      ttsCtxRef.current = ctx;
+      setAudioContext(ctx);
+      playerRef.current = null;
+    }
+    // A context created outside a user gesture starts suspended, and audio
+    // would silently never play.
+    if (ctx.state === 'suspended') {
+      ctx.resume().catch(() => {});
+    }
+    if (!playerRef.current) {
+      playerRef.current = createGaplessPlayer(ctx, {
+        onStateChange: (isPlaying) => {
+          // UI state follows actual playback rather than server events, which
+          // used to flip to idle while audio was still draining.
+          setStatus(isPlaying ? 'speaking' : 'idle');
+          // Tell the server too. It streams a 13s reply in about 2s, so
+          // without this it unmutes the microphone while the agent is still
+          // audible - the mic then hears the agent and answers it.
+          reportPlaybackState(isPlaying);
+        },
+      });
+    }
+    return ctx;
+  }, [setAudioContext, setStatus, reportPlaybackState]);
 
   const stopTtsPlayback = useCallback(() => {
-    if (currentTtsSourceRef.current) {
-      try {
-        currentTtsSourceRef.current.onended = null;
-        currentTtsSourceRef.current.stop();
-      } catch {
-        // ignore stop errors on already-ended sources
-      }
-      currentTtsSourceRef.current = null;
-    }
-    ttsQueueRef.current = [];
-    isPlayingTtsRef.current = false;
+    // Bump the generation so buffers still being decoded are discarded rather
+    // than scheduled on top of whatever plays next.
+    playbackGenerationRef.current += 1;
+    if (playerRef.current) playerRef.current.stop();
   }, []);
 
   const handleServerStatus = useCallback((msg) => {
@@ -181,7 +194,7 @@ export function useVoiceCall() {
         setFiller(null);
         break;
       default:
-        if ((message.startsWith('upload_received') || message.startsWith('decoded') || message.startsWith('vading')) && capturingRef.current) {
+        if (typeof message === 'string' && (message.startsWith('upload_received') || message.startsWith('decoded') || message.startsWith('vading')) && capturingRef.current) {
           const currentStatus = useCallStore.getState().status;
           if (currentStatus !== 'processing' && currentStatus !== 'speaking') {
             setStatus('listening');
@@ -209,30 +222,30 @@ export function useVoiceCall() {
   }, [addTranscriptEntry, setStatus, updateLastTranscriptEntry]);
 
   const handleServerResponseAudio = useCallback((data) => {
-    const ctx = audioContext || ttsCtxRef.current;
-    if (!ctx) {
-      try {
-        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-        const newCtx = new AudioContextClass();
-        setAudioContext(newCtx);
-        ttsCtxRef.current = newCtx;
-      } catch {
-        return;
-      }
-    }
+    const ctx = ensurePlaybackContext();
+    if (!ctx) return;
 
-    const targetCtx = audioContext || ttsCtxRef.current;
-    // Backend now sends WAV per sentence - decodeAudioData will work reliably
-    targetCtx.decodeAudioData(data.slice(0), (buffer) => {
-      ttsQueueRef.current.push(buffer);
-      if (!isPlayingTtsRef.current) {
-        playNextTtsChunkRef.current();
-      }
-    }, (err) => {
-      console.error('decodeAudioData failed (backend should send WAV):', err);
-      // No fallback - backend fix ensures WAV is sent
-    });
-  }, [audioContext, setStatus, setAudioContext]);
+    // decodeAudioData is asynchronous and gives NO ordering guarantee: with
+    // ~115 chunks in flight, roughly one in ten finished out of order, and the
+    // player scheduled them in completion order rather than wire order. Chunk
+    // 11 played before chunk 10, 14 before 13 - which is heard as the voice
+    // breaking up and doubling back on itself. (The saved recording was always
+    // fine because the server composes that from PCM in the correct order.)
+    //
+    // Chaining the decodes restores wire order. Decoding ~120ms of audio takes
+    // well under a millisecond, so serialising costs no measurable latency.
+    const generation = playbackGenerationRef.current;
+    decodeChainRef.current = decodeChainRef.current
+      .then(() => ctx.decodeAudioData(data.slice(0)))
+      .then((buffer) => {
+        // Dropped if barge-in reset playback while this was decoding.
+        if (generation !== playbackGenerationRef.current) return;
+        if (playerRef.current) playerRef.current.schedule(buffer);
+      })
+      .catch((err) => {
+        console.error('[voice] decodeAudioData failed', err);
+      });
+  }, [ensurePlaybackContext]);
 
   const handleServerError = useCallback((msg) => {
     const errorMessage = msg.message;
@@ -269,16 +282,17 @@ export function useVoiceCall() {
             setFiller(null);
             break;
           case 'turn_ended':
-            // Don't stop playback - let audio finish naturally
-            // stopTtsPlayback() would cut off remaining queued audio
-            setStatus('idle');
+            // Let queued audio finish; the player reports idle when it drains.
             setRagActive(false);
             setFiller(null);
+            if (!(playerRef.current && playerRef.current.isPlaying)) {
+              setStatus('idle');
+            }
             break;
           case 'response_audio':
             // Metadata event for TTS first audio latency - actual audio comes as binary messages
             if (msg.latency_ms !== undefined) {
-              setLatencies(prev => ({ ...prev, ttsFirstAudio: msg.latency_ms }));
+              setLatencies({ ttsFirstAudio: msg.latency_ms });
             }
             break;
           case 'sentiment':
@@ -296,7 +310,7 @@ export function useVoiceCall() {
             setLatencies({
               stt: msg.stt ?? null,
               llm: msg.llm ?? null,
-              ttsFirstAudio: msg.ttsFirstAudio ?? null,
+              ...(msg.ttsFirstAudio != null ? { ttsFirstAudio: msg.ttsFirstAudio } : {}),
               total: msg.total ?? null,
             });
             break;
@@ -320,12 +334,9 @@ export function useVoiceCall() {
     handleServerError,
     handleServerSentiment,
     handleServerFiller,
-    addTranscriptEntry,
-    updateLastTranscriptEntry,
     setStatus,
     setRagActive,
     setFiller,
-    stopTtsPlayback,
     setLatencies,
   ]);
 
@@ -334,7 +345,11 @@ export function useVoiceCall() {
       try {
         const oldWs = wsRef.current;
         if (oldWs && (oldWs.readyState === WebSocket.OPEN || oldWs.readyState === WebSocket.CONNECTING)) {
-          try { oldWs.close(); } catch {}
+          try {
+            oldWs.close();
+          } catch {
+            // Already closing.
+          }
         }
 
         const ws = new WebSocket(`${WS_URL}/${sessionId}`);
@@ -351,7 +366,7 @@ export function useVoiceCall() {
         };
 
         ws.onmessage = (event) => {
-          handleServerMessage(event);
+          if (messageHandlerRef.current) messageHandlerRef.current(event);
         };
 
         ws.onerror = () => {
@@ -377,7 +392,10 @@ export function useVoiceCall() {
         reject(error);
       }
     });
-  }, [setConnectionStatus, stopTtsPlayback, setStatus, handleServerMessage]);
+    // handleServerMessage is intentionally not a dependency: it is read
+    // through messageHandlerRef so the open socket always calls the latest
+    // version without needing to reconnect.
+  }, [setConnectionStatus, stopTtsPlayback, setStatus]);
 
   const startMicCapture = useCallback(async () => {
     if (capturingRef.current) return false;
@@ -391,90 +409,95 @@ export function useVoiceCall() {
         },
       });
 
-      const streamTracks = stream.getAudioTracks();
-      console.info('[voice] got mic stream; tracks=', streamTracks.length, 'readyState=', streamTracks[0] ? streamTracks[0].readyState : 'none');
-
       setMediaStream(stream);
       setStatus('listening');
       capturingRef.current = true;
 
       const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-      const audioContext = new AudioContextClass();
-      if (audioContext.state === 'suspended') {
-        await audioContext.resume();
+      // Capture at the target rate directly: the browser resamples natively,
+      // with proper anti-aliasing. Hand-rolled nearest-neighbour decimation
+      // from 48 kHz folded everything above 8 kHz back into the audible band
+      // and measurably degraded transcription.
+      const captureCtx = new AudioContextClass({ sampleRate: TARGET_SAMPLE_RATE });
+      if (captureCtx.state === 'suspended') {
+        await captureCtx.resume();
       }
-      console.info('[voice] AudioContext sampleRate=', audioContext.sampleRate, 'state=', audioContext.state);
-      setAudioContext(audioContext);
-      ttsCtxRef.current = audioContext;
+      captureCtxRef.current = captureCtx;
 
-      const source = audioContext.createMediaStreamSource(stream);
-      processorRef.current = audioContext.createScriptProcessor(4096, 1, 1);
+      await captureCtx.audioWorklet.addModule(PCM_WORKLET_URL);
 
-      const analyser = audioContext.createAnalyser();
+      const source = captureCtx.createMediaStreamSource(stream);
+      const analyser = captureCtx.createAnalyser();
       analyser.fftSize = 2048;
       analyserRef.current = analyser;
 
-      const chunks = [];
-      let processCount = 0;
+      const worklet = new AudioWorkletNode(captureCtx, 'pcm-capture');
+      workletNodeRef.current = worklet;
+      worklet.port.postMessage({ muted: mutedRef.current });
 
-      processorRef.current.onaudioprocess = (event) => {
-        if (mutedRef.current) {
-          return;
-        }
-        const inputData = event.inputBuffer.getChannelData(0);
-        let maxAmplitude = 0;
-        for (let i = 0; i < inputData.length; i += 64) {
-          const abs = Math.abs(inputData[i] || 0);
-          if (abs > maxAmplitude) maxAmplitude = abs;
-        }
-        const pcm = downMixAndResample(event.inputBuffer, TARGET_SAMPLE_RATE);
-        chunks.push(pcm);
-        processCount += 1;
-        if (processCount % 20 === 0) {
-          console.info('[voice] onaudioprocess count=', processCount, 'chunkLen=', pcm.length, 'queuedChunks=', chunks.length, 'maxAmplitude=', maxAmplitude.toFixed(4));
+      pendingFramesRef.current = [];
+      bargeInFramesRef.current = 0;
+
+      worklet.port.onmessage = (event) => {
+        const { frame, peak } = event.data;
+        if (!frame) return;
+        pendingFramesRef.current.push(new Int16Array(frame));
+
+        // Client-side barge-in. The user should be able to cut the agent off
+        // without waiting for the server to notice.
+        if (playerRef.current && playerRef.current.isPlaying) {
+          if (peak >= BARGE_IN_PEAK_THRESHOLD) {
+            bargeInFramesRef.current += 1;
+            if (bargeInFramesRef.current >= BARGE_IN_FRAMES) {
+              bargeInFramesRef.current = 0;
+              playerRef.current.stop();
+              const ws = wsRef.current;
+              if (ws && ws.readyState === WebSocket.OPEN) {
+                try {
+                  ws.send(JSON.stringify({ type: 'stop_playback' }));
+                } catch {
+                  // Socket is going away; the server will clean up.
+                }
+              }
+            }
+          } else {
+            bargeInFramesRef.current = 0;
+          }
+        } else {
+          bargeInFramesRef.current = 0;
         }
       };
 
+      // The worklet is a sink here; connecting it to the destination would
+      // route the microphone to the speakers.
       source.connect(analyser);
-      analyser.connect(processorRef.current);
-      processorRef.current.connect(audioContext.destination);
+      analyser.connect(worklet);
 
       chunkIntervalRef.current = window.setInterval(() => {
-        if (chunks.length === 0 || mutedRef.current || !capturingRef.current) {
-          if (chunks.length === 0 && capturingRef.current && processCount > 0 && processCount % 20 === 0) {
-            console.warn('[voice] interval tick: no chunks queued despite onaudioprocess firing');
-          }
-          return;
-        }
-        const totalLength = chunks.reduce((sum, c) => sum + c.length, 0);
-        const combined = new Int16Array(totalLength);
-        let offset = 0;
-        for (const chunk of chunks) {
-          combined.set(chunk, offset);
-          offset += chunk.length;
-        }
-        chunks.length = 0;
+        const frames = pendingFramesRef.current;
+        if (frames.length === 0 || mutedRef.current || !capturingRef.current) return;
 
         const currentWs = wsRef.current;
-        if (currentWs && currentWs.readyState === WebSocket.OPEN) {
-          let sent = 0;
-          for (let i = 0; i < combined.length; i += VAD_FRAME_BYTES / 2) {
-            const frame = combined.subarray(i, i + VAD_FRAME_BYTES / 2);
-            if (frame.length === VAD_FRAME_BYTES / 2) {
-              try {
-                currentWs.send(encodePcmChunk(frame));
-                sent += 1;
-              } catch (err) {
-                console.error('[voice] ws send failed', err);
-                break;
-              }
-            }
-          }
-          if (sent > 0) {
-            console.info('[voice] sent frames=', sent, 'bytes=', sent * VAD_FRAME_BYTES);
-          }
-        } else {
-          console.warn('[voice] ws not open; readyState=', currentWs ? currentWs.readyState : 'null');
+        if (!currentWs || currentWs.readyState !== WebSocket.OPEN) return;
+
+        // Send every captured sample. The previous implementation re-framed
+        // into fixed 512-sample blocks and discarded the remainder on each
+        // tick without carrying it over, silently dropping roughly an eighth
+        // of everything the user said.
+        let total = 0;
+        for (const f of frames) total += f.length;
+        const combined = new Int16Array(total);
+        let offset = 0;
+        for (const f of frames) {
+          combined.set(f, offset);
+          offset += f.length;
+        }
+        frames.length = 0;
+
+        try {
+          currentWs.send(combined.buffer);
+        } catch (err) {
+          console.error('[voice] ws send failed', err);
         }
       }, AUDIO_CHUNK_INTERVAL_MS);
 
@@ -484,7 +507,7 @@ export function useVoiceCall() {
       setError(error instanceof Error ? error.message : 'Microphone access failed');
       return false;
     }
-  }, [setMediaStream, setStatus, setAudioContext, setError]);
+  }, [setMediaStream, setStatus, setError]);
 
   const startCall = useCallback(async (existingSessionId) => {
     if (connectingRef.current) return;
@@ -575,13 +598,23 @@ export function useVoiceCall() {
       chunkIntervalRef.current = null;
     }
 
-    if (processorRef.current) {
-      processorRef.current.disconnect();
-      processorRef.current = null;
+    if (workletNodeRef.current) {
+      try {
+        workletNodeRef.current.port.onmessage = null;
+        workletNodeRef.current.disconnect();
+      } catch {
+        // Already torn down.
+      }
+      workletNodeRef.current = null;
     }
+    pendingFramesRef.current = [];
 
     if (analyserRef.current) {
-      try { analyserRef.current.disconnect(); } catch {}
+      try {
+        analyserRef.current.disconnect();
+      } catch {
+        // Already disconnected.
+      }
       analyserRef.current = null;
     }
 
@@ -589,12 +622,15 @@ export function useVoiceCall() {
       mediaStream.getTracks().forEach((track) => track.stop());
     }
 
-    if (audioContext && audioContext.state !== 'closed') {
-      audioContext.close().catch(function() {});
+    if (captureCtxRef.current && captureCtxRef.current.state !== 'closed') {
+      captureCtxRef.current.close().catch(function() {});
     }
-    if (ttsCtxRef.current && ttsCtxRef.current !== audioContext && ttsCtxRef.current.state !== 'closed') {
+    captureCtxRef.current = null;
+    if (ttsCtxRef.current && ttsCtxRef.current.state !== 'closed') {
       ttsCtxRef.current.close().catch(function() {});
     }
+    ttsCtxRef.current = null;
+    playerRef.current = null;
 
     capturingRef.current = false;
 
@@ -602,7 +638,7 @@ export function useVoiceCall() {
     setConnectionStatus('disconnected');
     setMediaStream(null);
     setAudioContext(null);
-  }, [sessionId, mediaStream, audioContext, stopTtsPlayback, setStatus, setConnectionStatus, setMediaStream, setAudioContext]);
+  }, [sessionId, mediaStream, stopTtsPlayback, setStatus, setConnectionStatus, setMediaStream, setAudioContext]);
 
   const stopCapture = useCallback(() => {
     const ws = wsRef.current;
@@ -623,15 +659,30 @@ export function useVoiceCall() {
       chunkIntervalRef.current = null;
     }
 
-    if (processorRef.current) {
-      processorRef.current.disconnect();
-      processorRef.current = null;
+    if (workletNodeRef.current) {
+      try {
+        workletNodeRef.current.port.onmessage = null;
+        workletNodeRef.current.disconnect();
+      } catch {
+        // Already torn down.
+      }
+      workletNodeRef.current = null;
     }
+    pendingFramesRef.current = [];
 
     if (analyserRef.current) {
-      try { analyserRef.current.disconnect(); } catch {}
+      try {
+        analyserRef.current.disconnect();
+      } catch {
+        // Already disconnected.
+      }
       analyserRef.current = null;
     }
+
+    if (captureCtxRef.current && captureCtxRef.current.state !== 'closed') {
+      captureCtxRef.current.close().catch(function() {});
+    }
+    captureCtxRef.current = null;
 
     if (mediaStream) {
       mediaStream.getTracks().forEach((track) => track.stop());
@@ -640,13 +691,10 @@ export function useVoiceCall() {
   }, [sessionId, mediaStream, setMediaStream, stopTtsPlayback, setStatus]);
 
   const toggleCapture = useCallback(async () => {
-    console.info('[voice] toggleCapture invoked; capturing=', capturingRef.current, 'muted=', mutedRef.current);
     if (capturingRef.current) {
-      console.info('[voice] toggleCapture -> stopCapture');
       stopCapture();
       return;
     }
-    console.info('[voice] toggleCapture -> startMicCapture');
     const ok = await startMicCapture();
     if (!ok) {
       setError('Microphone access failed');
@@ -675,6 +723,10 @@ export function useVoiceCall() {
       ws.send(JSON.stringify({ type: 'voice_select', voice_id: voiceId }));
     }
   }, [setSelectedVoiceId]);
+
+  useEffect(() => {
+    messageHandlerRef.current = handleServerMessage;
+  }, [handleServerMessage]);
 
   useEffect(() => {
     connectWebSocketRef.current = connectWebSocket;
@@ -716,6 +768,5 @@ export function useVoiceCall() {
     selectVoice,
     setStatus,
     setError,
-    analyser: analyserRef.current,
   };
 }

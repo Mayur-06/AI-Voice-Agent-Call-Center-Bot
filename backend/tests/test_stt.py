@@ -39,3 +39,48 @@ async def test_transcribe_audio_api_error(mock_settings):
     with patch("httpx.AsyncClient.post", return_value=mock_response):
         with pytest.raises(Exception):
             await transcribe_audio(b"fake-audio-bytes")
+
+
+# --- Regression: Whisper hallucinating words out of silence ------------------
+
+
+def test_whisper_stock_phrases_rejected_when_barely_any_voice():
+    """The exact transcripts a real call produced from ~100ms of room tone.
+
+    Each of these became a user turn, so the agent answered phantom input and
+    ended up talking to itself.
+    """
+    from app.services.stt import is_hallucinated_silence
+
+    for phantom in [
+        " Thank you.", " So", " Oh", " .", " Okay.", " I'm sorry.",
+        " I'm going to go.", " you", " Hmm", "", "   ",
+    ]:
+        assert is_hallucinated_silence(phantom, voiced_ms=100), phantom
+
+
+def test_same_words_accepted_when_actually_spoken():
+    """The filter must not swallow a caller who really said these."""
+    from app.services.stt import is_hallucinated_silence
+
+    for genuine in [" Thank you.", " Hello.", " Okay.", " Yeah."]:
+        assert not is_hallucinated_silence(genuine, voiced_ms=700), genuine
+
+
+def test_real_sentences_never_filtered():
+    from app.services.stt import is_hallucinated_silence
+
+    for text in [
+        "Thank you for your help with the refund",
+        "Hello, can I speak to support?",
+        "So what are your business hours?",
+        "yes", "no", "25", "my order number is 4471",
+    ]:
+        assert not is_hallucinated_silence(text, voiced_ms=300), text
+
+
+def test_unknown_duration_gives_caller_benefit_of_the_doubt():
+    """An explicit stop_listening has no VAD measurement; trust it."""
+    from app.services.stt import is_hallucinated_silence
+
+    assert not is_hallucinated_silence(" Thank you.", voiced_ms=None)
