@@ -3078,6 +3078,15 @@
   display: none;
 }
 
+/* ─── Analytics Dashboard — Postcall-style card treatment ─────────────────── */
+
+.analytics-section-card {
+  border-radius: 1.25rem;
+  border: 1px solid rgba(3, 25, 30, 0.08);
+  box-shadow: 0 8px 30px rgba(3, 25, 30, 0.04);
+  background-color: rgba(251, 251, 255, 0.75);
+}
+
 /* ─── Hide Scrollbars ──────────────────────────────────────────────────────── */
 
 .vc-transcript-scroll,
