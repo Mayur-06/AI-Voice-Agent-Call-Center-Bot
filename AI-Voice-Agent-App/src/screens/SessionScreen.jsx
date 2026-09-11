@@ -382,7 +382,7 @@ export default function SessionScreen() {
   const selectedVoice = voices.find((v) => v.voice_id === selectedVoiceId);
   const selectedVoiceName = selectedVoice?.name || selectedVoiceId;
   const hasDocuments = uploadedDocuments.length > 0;
-  const canStart = Boolean(selectedPersona) && !isStarting;
+  const canStart = Boolean(selectedPersona) && Boolean(selectedVoiceId) && !isStarting;
 
   const getPersonaInitials = (persona) => {
     if (persona.initials) return persona.initials;

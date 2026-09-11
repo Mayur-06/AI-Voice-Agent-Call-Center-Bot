@@ -316,6 +316,7 @@ export default function VoiceCallScreen() {
   } = useVoiceCall();
 
   const uploadedDocuments = useCallStore((s) => s.uploadedDocuments);
+  const setUploadedDocuments = useCallStore((s) => s.setUploadedDocuments);
   const [textInput, setTextInput] = useState('');
   const [activeTab, setActiveTab] = useState('call'); // 'call' | 'transcript'
   const [isContextDrawerOpen, setIsContextDrawerOpen] = useState(false);
@@ -364,12 +365,13 @@ export default function VoiceCallScreen() {
 
   const handleEndCall = useCallback(() => {
     stopCall();
+    setUploadedDocuments([]);
     if (routeSessionId) {
       navigate(`/review/${routeSessionId}`);
     } else {
       navigate('/session');
     }
-  }, [stopCall, navigate, routeSessionId]);
+  }, [stopCall, navigate, routeSessionId, setUploadedDocuments]);
 
   const handleSendText = useCallback(() => {
     const trimmed = textInput.trim();
