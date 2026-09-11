@@ -32,9 +32,9 @@ export default function AnalyticsDashboard() {
     return () => { cancelled = true; };
   }, []);
 
-  if (loading) return <div className="p-6">Loading analytics...</div>;
-  if (error) return <div className="p-6 text-red-500">{error}</div>;
-  if (!analytics) return <div className="p-6">No analytics available.</div>;
+  if (loading) return <div className="p-4 sm:p-6">Loading analytics...</div>;
+  if (error) return <div className="p-4 sm:p-6 text-red-500">{error}</div>;
+  if (!analytics) return <div className="p-4 sm:p-6">No analytics available.</div>;
 
   const sentimentEntries = Object.entries(analytics.sentiment_breakdown || {});
   const sentimentPieData = sentimentEntries.map(([name, value]) => ({ name, value }));
@@ -42,30 +42,30 @@ export default function AnalyticsDashboard() {
   const perPersona = analytics.per_persona_stats || [];
 
   return (
-    <div className="p-6 space-y-6">
-      <h1 className="text-2xl font-semibold">Analytics Dashboard</h1>
+    <div className="p-4 sm:p-6 space-y-4 sm:space-y-6">
+      <h1 className="text-xl sm:text-2xl font-semibold">Analytics Dashboard</h1>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="border rounded-lg p-4">
-          <h2 className="font-medium text-gray-500">Total Sessions</h2>
-          <p className="text-2xl font-semibold">{analytics.total_sessions ?? 0}</p>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+        <div className="border rounded-lg p-4 min-w-0">
+          <h2 className="font-medium text-gray-500 text-sm">Total Sessions</h2>
+          <p className="text-xl sm:text-2xl font-semibold truncate">{analytics.total_sessions ?? 0}</p>
         </div>
-        <div className="border rounded-lg p-4">
-          <h2 className="font-medium text-gray-500">Total Messages</h2>
-          <p className="text-2xl font-semibold">{analytics.total_messages ?? 0}</p>
+        <div className="border rounded-lg p-4 min-w-0">
+          <h2 className="font-medium text-gray-500 text-sm">Total Messages</h2>
+          <p className="text-xl sm:text-2xl font-semibold truncate">{analytics.total_messages ?? 0}</p>
         </div>
-        <div className="border rounded-lg p-4">
-          <h2 className="font-medium text-gray-500">Avg Latency</h2>
-          <p className="text-2xl font-semibold">{Math.round(analytics.avg_latency_ms ?? 0)} ms</p>
+        <div className="border rounded-lg p-4 min-w-0">
+          <h2 className="font-medium text-gray-500 text-sm">Avg Latency</h2>
+          <p className="text-xl sm:text-2xl font-semibold truncate">{Math.round(analytics.avg_latency_ms ?? 0)} ms</p>
         </div>
-        <div className="border rounded-lg p-4">
-          <h2 className="font-medium text-gray-500">Avg Session Duration</h2>
-          <p className="text-2xl font-semibold">{Math.round(analytics.avg_session_duration_s ?? 0)} s</p>
+        <div className="border rounded-lg p-4 min-w-0">
+          <h2 className="font-medium text-gray-500 text-sm">Avg Session Duration</h2>
+          <p className="text-xl sm:text-2xl font-semibold truncate">{Math.round(analytics.avg_session_duration_s ?? 0)} s</p>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div className="border rounded-lg p-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 sm:gap-4">
+        <div className="border rounded-lg p-4 min-w-0">
           <h2 className="font-medium text-gray-500 mb-2">Calls Over Time</h2>
           {callsOverTime.length === 0 ? (
             <p className="text-sm text-gray-500">No call history yet.</p>
@@ -82,7 +82,7 @@ export default function AnalyticsDashboard() {
           )}
         </div>
 
-        <div className="border rounded-lg p-4">
+        <div className="border rounded-lg p-4 min-w-0">
           <h2 className="font-medium text-gray-500 mb-2">Sentiment Breakdown</h2>
           {sentimentPieData.length === 0 ? (
             <p className="text-sm text-gray-500">No sentiment data yet.</p>
@@ -102,7 +102,7 @@ export default function AnalyticsDashboard() {
         </div>
       </div>
 
-      <div className="border rounded-lg p-4">
+      <div className="border rounded-lg p-4 min-w-0">
         <h2 className="font-medium text-gray-500 mb-2">Per-Persona Performance</h2>
         {perPersona.length === 0 ? (
           <p className="text-sm text-gray-500">No persona data yet.</p>
@@ -122,8 +122,8 @@ export default function AnalyticsDashboard() {
         )}
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div className="border rounded-lg p-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 sm:gap-4">
+        <div className="border rounded-lg p-4 min-w-0">
           <h2 className="font-medium text-gray-500 mb-2">Sentiment Counts</h2>
           <div className="space-y-1">
             {sentimentEntries.length === 0 ? (
@@ -138,9 +138,9 @@ export default function AnalyticsDashboard() {
             )}
           </div>
         </div>
-        <div className="border rounded-lg p-4">
+        <div className="border rounded-lg p-4 min-w-0">
           <h2 className="font-medium text-gray-500 mb-2">Interruptions</h2>
-          <p className="text-2xl font-semibold">{analytics.interruption_count ?? 0}</p>
+          <p className="text-xl sm:text-2xl font-semibold">{analytics.interruption_count ?? 0}</p>
         </div>
       </div>
 
