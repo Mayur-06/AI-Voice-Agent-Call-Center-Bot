@@ -476,7 +476,7 @@ export default function VoiceCallScreen() {
               variant="outline"
               size="sm"
               onClick={() => setIsContextDrawerOpen(true)}
-              className="vc-context-toggle-btn inline-flex lg:hidden"
+              className="vc-context-toggle-btn"
               aria-label="Open session context sidebar"
             >
               <InfoIcon />
@@ -548,7 +548,7 @@ export default function VoiceCallScreen() {
       {/* ─── Main Workspace ─────────────────────────────────────────── */}
       <main className="vc-main">
         {/* ─── LEFT: Transcript ─────────────────────────────────────── */}
-        <section className={cn('vc-transcript-column', activeTab !== 'transcript' && 'hidden md:flex')}>
+        <section className={cn('vc-transcript-column', activeTab === 'transcript' && 'vc-pane--active')}>
           <div className="vc-transcript-header">
             <div className="vc-transcript-header-left">
               <span className="vc-column-title">Conversation</span>
@@ -644,7 +644,7 @@ export default function VoiceCallScreen() {
         </section>
 
         {/* ─── CENTER: Aura Visualizer ──────────────────────────────── */}
-        <section className={cn('vc-aura-column', activeTab !== 'call' && 'hidden md:flex')}>
+        <section className={cn('vc-aura-column', activeTab === 'call' && 'vc-pane--active')}>
           <div className="vc-aura-wrapper">
             {/* Soft ambient backdrop */}
             <div className="vc-aura-backdrop-outer" aria-hidden="true" />
@@ -686,7 +686,7 @@ export default function VoiceCallScreen() {
           {/* Mobile Live Floating Caption */}
           {latestMessage && (
             <div
-              className="vc-mobile-caption md:hidden"
+              className="vc-mobile-caption"
               onClick={() => setActiveTab('transcript')}
               role="button"
               tabIndex={0}
@@ -706,7 +706,7 @@ export default function VoiceCallScreen() {
         </section>
 
         {/* ─── RIGHT: Session Context (Permanent sidebar on desktop only) ─── */}
-        <section className="vc-context-column hidden lg:flex">
+        <section className="vc-context-column">
           <div className="vc-context-card">
             <div className="vc-context-header">
               <span className="vc-context-header-title">Session Context</span>
@@ -745,7 +745,7 @@ export default function VoiceCallScreen() {
       <footer className="vc-controls-bar">
         <div className="vc-controls-inner">
           {/* Left spacer for symmetry on large screens */}
-          <div className="vc-controls-left hidden lg:flex" />
+          <div className="vc-controls-left" />
 
           {/* Center: Fallback Text Input */}
           <div className="vc-controls-center">
