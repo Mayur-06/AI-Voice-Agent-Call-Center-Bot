@@ -82,6 +82,26 @@ async def create_session(
     return str(res.data[0]["id"])
 
 
+async def get_session_document_ids(session_id: str, persona_id: str) -> list[str]:
+    """Return only documents explicitly attached to this session and persona."""
+    client = get_supabase()
+    try:
+        links = await run_supabase(
+            lambda: client.table("session_documents").select("document_id").eq("session_id", session_id).execute()
+        )
+        document_ids = [str(link["document_id"]) for link in (links.data or []) if link.get("document_id")]
+        if not document_ids:
+            return []
+        documents = await run_supabase(
+            lambda: client.table("documents").select("id").in_("id", document_ids)
+            .eq("persona_id", persona_id).eq("status", "indexed").execute()
+        )
+        return [str(document["id"]) for document in (documents.data or []) if document.get("id")]
+    except Exception:
+        logger.exception("Failed to load session documents for session=%s", session_id)
+        return []
+
+
 async def save_turn(session_id: str, speaker: str, text: str, sentiment: str | None = None,
                     latency_ms: int | None = None, interrupted: bool = False,
                     stt_latency_ms: int | None = None, llm_latency_ms: int | None = None,

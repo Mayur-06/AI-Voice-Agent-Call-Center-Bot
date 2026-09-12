@@ -2,8 +2,8 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useVoiceCall } from '@/hooks/useVoiceCall';
 import useCallStore from '@/store/callStore';
-import { useSessionStore } from '@/store/session';
 import { Button } from '@/components/ui/button';
+import { Toast, ToastClose, ToastDescription, ToastTitle } from '@/components/ui/toast';
 import { API_BASE, apiFetch } from '@/config';
 
 const PERSONAS = [
@@ -164,7 +164,6 @@ export default function SessionScreen() {
   const setCallTranscript = useCallStore((s) => s.setTranscript);
   const setCallFiller = useCallStore((s) => s.setFiller);
   const setCallLatencies = useCallStore((s) => s.setLatencies);
-  const setSessionConnectionStatus = useSessionStore((s) => s.setConnectionStatus);
 
   const [isStarting, setIsStarting] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
@@ -247,6 +246,12 @@ export default function SessionScreen() {
       window.removeEventListener('keydown', handleKeyDown);
     };
   }, [isPastSessionsDrawerOpen]);
+
+  useEffect(() => {
+    if (!error) return;
+    const t = setTimeout(() => setError(null), 4000);
+    return () => clearTimeout(t);
+  }, [error, setError]);
 
   const handleFiles = useCallback(async (files) => {
     const fileArray = Array.from(files).filter((file) => {
@@ -359,10 +364,20 @@ export default function SessionScreen() {
 
       const data = await response.json();
       const newSessionId = data.id;
+      const documentIds = uploadedDocuments.map((doc) => doc?.id).filter(Boolean);
+      if (documentIds.length) {
+        const attachmentResponse = await apiFetch(`${API_BASE}/api/sessions/${newSessionId}/documents`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ document_ids: documentIds }),
+        });
+        if (!attachmentResponse.ok) {
+          throw new Error('Failed to attach documents to the session');
+        }
+      }
       setCallSessionId(newSessionId);
       setCallStatus('idle');
       setCallConnectionStatus('disconnected');
-      setSessionConnectionStatus('disconnected');
       setCallTranscript([]);
       setError(null);
       setCallFiller(null);
@@ -372,17 +387,16 @@ export default function SessionScreen() {
       setError(err instanceof Error ? err.message : 'Failed to create session');
       setCallStatus('idle');
       setCallConnectionStatus('disconnected');
-      setSessionConnectionStatus('disconnected');
     } finally {
       setIsStarting(false);
     }
-  }, [selectedPersona, selectedVoiceId, setCallSessionId, setCallStatus, setCallConnectionStatus, setSessionConnectionStatus, setCallTranscript, setError, setCallFiller, setCallLatencies, navigate]);
+  }, [selectedPersona, selectedVoiceId, uploadedDocuments, setCallSessionId, setCallStatus, setCallConnectionStatus, setCallTranscript, setError, setCallFiller, setCallLatencies, navigate]);
 
   const selectedPersonaData = PERSONAS.find((p) => p.id === selectedPersona);
   const selectedVoice = voices.find((v) => v.voice_id === selectedVoiceId);
   const selectedVoiceName = selectedVoice?.name || selectedVoiceId;
   const hasDocuments = uploadedDocuments.length > 0;
-  const canStart = Boolean(selectedPersona) && !isStarting;
+  const canStart = Boolean(selectedPersona) && Boolean(selectedVoiceId) && !isStarting;
 
   const getPersonaInitials = (persona) => {
     if (persona.initials) return persona.initials;
@@ -428,11 +442,11 @@ export default function SessionScreen() {
       {/* ─── Main Content ───────────────────────────────────────────── */}
       <main className="session-setup-main">
         {error && (
-          <div className="session-error-banner" role="alert">
-            <span className="session-error-icon">!</span>
-            <span className="session-error-text">{error}</span>
-            <button className="session-error-dismiss" onClick={() => setError(null)} aria-label="Dismiss error">×</button>
-          </div>
+          <Toast>
+            <ToastTitle>Unable to continue</ToastTitle>
+            <ToastDescription>{error}</ToastDescription>
+            <ToastClose onClick={() => setError(null)} />
+          </Toast>
         )}
 
         {/* Page intro */}

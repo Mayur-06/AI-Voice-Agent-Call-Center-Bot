@@ -2034,6 +2034,77 @@
   flex-shrink: 0;
 }
 
+/* ─── Toast / Snackbar ─────────────────────────────────────────────────────── */
+
+.vc-toast-layer {
+  position: fixed;
+  bottom: 1rem;
+  left: 1rem;
+  z-index: 60;
+  width: calc(100% - 2rem);
+  max-width: 22rem;
+  pointer-events: none;
+}
+
+.vc-toast {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 2.25rem 0.75rem 1rem;
+  background-color: rgba(3, 25, 30, 0.92);
+  color: var(--ghost-white);
+  border-radius: 0.75rem;
+  box-shadow: 0 10px 30px rgba(3, 25, 30, 0.18);
+  font-size: 0.8125rem;
+  line-height: 1.4;
+  pointer-events: auto;
+  animation: vc-toast-in-bottom 0.25s ease-out;
+}
+
+@keyframes vc-toast-in-bottom {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.vc-toast-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.25rem;
+  height: 1.25rem;
+  border-radius: 50%;
+  background-color: #ef4444;
+  color: white;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.vc-toast-text {
+  flex: 1;
+}
+
+.vc-toast-dismiss {
+  background: transparent;
+  border: none;
+  color: rgba(251, 251, 255, 0.8);
+  cursor: pointer;
+  font-size: 1rem;
+  padding: 0 0.25rem;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.vc-toast-dismiss:hover {
+  color: var(--ghost-white);
+}
+
 /* ─── Bottom Control Dock ─────────────────────────────────────────────────── */
 
 .vc-controls-bar {

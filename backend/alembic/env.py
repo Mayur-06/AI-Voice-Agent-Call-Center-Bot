@@ -7,7 +7,7 @@ import os
 sys.path.append(os.getcwd())
 
 from app.database import Base
-from app.models.database import Persona, Session, Message, Voice, Document, DocumentChunk, SentimentRecord, CallMetric, Recording
+from app.models.database import Persona, Session, Message, Voice, Document, SessionDocument, DocumentChunk, SentimentRecord, CallMetric, Recording
 
 config = context.config
 target_metadata = Base.metadata

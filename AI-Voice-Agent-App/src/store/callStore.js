@@ -1,5 +1,4 @@
 import { create } from 'zustand';
-import { useSessionStore } from './session';
 import { WS_URL, API_BASE } from '@/config';
 
 const AUDIO_CHUNK_INTERVAL_MS = 250;
@@ -27,12 +26,10 @@ const callStore = create((set) => ({
 
   setSessionId: (sessionId) => {
     set({ sessionId });
-    useSessionStore.getState().setSessionId(sessionId);
   },
   setStatus: (status) => set({ status }),
   setConnectionStatus: (connectionStatus) => {
     set({ connectionStatus });
-    useSessionStore.getState().setConnectionStatus(connectionStatus);
   },
   setTranscript: (transcript) => set({ transcript }),
   setSelectedPersona: (selectedPersona) => set({ selectedPersona }),
@@ -114,7 +111,6 @@ const callStore = create((set) => ({
       ttsSourceNode: null,
       filler: null,
     });
-    useSessionStore.getState().reset();
   },
 }));
 

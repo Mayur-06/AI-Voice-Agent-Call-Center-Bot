@@ -44,6 +44,10 @@ class SessionCreate(BaseModel):
     selected_voice: Optional[str] = None
 
 
+class SessionDocumentAttach(BaseModel):
+    document_ids: List[str] = Field(min_length=1)
+
+
 class Message(BaseModel):
     id: str
     session_id: str

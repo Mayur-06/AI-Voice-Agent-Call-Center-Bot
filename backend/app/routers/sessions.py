@@ -1,7 +1,7 @@
 import asyncio
 from fastapi import APIRouter, HTTPException, status
 from app.models.database import get_supabase, run_supabase
-from app.models.schemas import SessionCreate, Session, MessageRequest
+from app.models.schemas import SessionCreate, Session, MessageRequest, SessionDocumentAttach
 from app.services.llm import generate_response, get_persona_system_prompt
 from app.services.session import create_session, save_turn, load_turns, end_session, resolve_persona_id
 from app.services.call_summarizer import generate_call_summary
@@ -25,6 +25,38 @@ async def create_session_route(data: SessionCreate):
     if not res.data:
         raise HTTPException(status_code=500, detail="Failed to create session")
     return Session(**res.data[0])
+
+
+@router.post("/{session_id}/documents")
+async def attach_session_documents(session_id: str, data: SessionDocumentAttach):
+    """Attach already-uploaded documents to this call's retrieval scope."""
+    supabase = get_supabase()
+    session_res = await run_supabase(
+        lambda: supabase.table("sessions").select("id,persona_id").eq("id", session_id).limit(1).execute()
+    )
+    if not session_res.data:
+        raise HTTPException(status_code=404, detail="Session not found")
+    session = session_res.data[0]
+    document_ids = list(dict.fromkeys(str(document_id) for document_id in data.document_ids))
+    documents_res = await run_supabase(
+        lambda: supabase.table("documents").select("id,persona_id,status")
+        .in_("id", document_ids).eq("persona_id", session["persona_id"]).execute()
+    )
+    documents = documents_res.data or []
+    found_ids = {str(document["id"]) for document in documents}
+    if len(found_ids) != len(document_ids):
+        raise HTTPException(status_code=400, detail="Documents must belong to this session's persona")
+    not_indexed = [str(document["id"]) for document in documents if document.get("status") != "indexed"]
+    if not_indexed:
+        raise HTTPException(status_code=409, detail="Documents are still being indexed")
+
+    await run_supabase(
+        lambda: supabase.table("session_documents").upsert(
+            [{"session_id": session_id, "document_id": document_id} for document_id in document_ids],
+            on_conflict="session_id,document_id",
+        ).execute()
+    )
+    return {"session_id": session_id, "document_ids": document_ids}
 
 
 @router.get("", response_model=List[Session])

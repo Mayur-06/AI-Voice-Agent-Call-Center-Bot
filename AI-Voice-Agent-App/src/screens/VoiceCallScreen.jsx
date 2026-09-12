@@ -1,10 +1,11 @@
 import { useEffect, useRef, useCallback, useState, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Button } from '@/components/ui/button';
+import { Button, buttonVariants } from '@/components/ui/button';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { Separator } from '@/components/ui/separator';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { Toast, ToastClose, ToastDescription, ToastTitle } from '@/components/ui/toast';
 import { useVoiceCall } from '@/hooks/useVoiceCall';
 import useCallStore from '@/store/callStore';
 import { cn } from '@/lib/utils';
@@ -46,6 +47,12 @@ const PERSONAS = [
 
 function getPersona(id) {
   return PERSONAS.find((p) => p.id === id) || null;
+}
+
+function isMicError(message) {
+  if (!message || typeof message !== 'string') return false;
+  const lower = message.toLowerCase();
+  return lower.includes('microphone') || lower.includes('worklet') || lower.includes('getusermedia');
 }
 
 function MicIcon() {
@@ -244,8 +251,8 @@ function AuraVisualizer({ state, muted, isCapturing, onToggleCapture }) {
   ];
 
   return (
-    <div className={`vc-aura-visualizer ${auraState}`} aria-hidden="true">
-      <svg className="vc-aura-svg" viewBox="0 0 200 200">
+    <div className={`vc-aura-visualizer ${auraState}`}>
+      <svg className="vc-aura-svg" viewBox="0 0 200 200" aria-hidden="true">
         <defs>
           <radialGradient id="gentleSunGlow" cx="50%" cy="50%" fx="50%" fy="50%" r="50%">
             <stop offset="0%" stopColor="#ebe1c1" stopOpacity={auraState === 'aura-speaking' ? 0.7 : 0.4} />
@@ -316,6 +323,7 @@ export default function VoiceCallScreen() {
   } = useVoiceCall();
 
   const uploadedDocuments = useCallStore((s) => s.uploadedDocuments);
+  const setUploadedDocuments = useCallStore((s) => s.setUploadedDocuments);
   const [textInput, setTextInput] = useState('');
   const [activeTab, setActiveTab] = useState('call'); // 'call' | 'transcript'
   const [isContextDrawerOpen, setIsContextDrawerOpen] = useState(false);
@@ -362,14 +370,21 @@ export default function VoiceCallScreen() {
     }
   }, [transcript, filler]);
 
+  useEffect(() => {
+    if (!error) return;
+    const t = setTimeout(() => setError(null), 4000);
+    return () => clearTimeout(t);
+  }, [error, setError]);
+
   const handleEndCall = useCallback(() => {
     stopCall();
+    setUploadedDocuments([]);
     if (routeSessionId) {
-      navigate(`/review/${routeSessionId}`);
+      navigate(`/review/${routeSessionId}`, { replace: true });
     } else {
       navigate('/session');
     }
-  }, [stopCall, navigate, routeSessionId]);
+  }, [stopCall, navigate, routeSessionId, setUploadedDocuments]);
 
   const handleSendText = useCallback(() => {
     const trimmed = textInput.trim();
@@ -536,13 +551,13 @@ export default function VoiceCallScreen() {
         </div>
       </nav>
 
-      {/* ─── Error Banner ───────────────────────────────────────────── */}
-      {error && (
-        <div className="vc-error-banner" role="alert">
-          <span className="vc-error-icon">!</span>
-          <span className="vc-error-text">{error}</span>
-          <button className="vc-error-dismiss" onClick={() => setError(null)} aria-label="Dismiss error">×</button>
-        </div>
+      {/* ─── Toast Layer ───────────────────────────────────────────── */}
+      {error && isMicError(error) && (
+        <Toast>
+          <ToastTitle>Unable to continue</ToastTitle>
+          <ToastDescription>{error}</ToastDescription>
+          <ToastClose onClick={() => setError(null)} />
+        </Toast>
       )}
 
       {/* ─── Main Workspace ─────────────────────────────────────────── */}
@@ -558,10 +573,9 @@ export default function VoiceCallScreen() {
             <div className="vc-transcript-header-right">
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    className="vc-icon-btn"
+                  <button
+                    type="button"
+                    className={cn(buttonVariants({ variant: "ghost", size: "icon-sm" }), "vc-icon-btn")}
                     aria-label="Copy conversation"
                     onClick={handleCopyTranscript}
                     disabled={transcript.length === 0}
@@ -574,16 +588,15 @@ export default function VoiceCallScreen() {
                         <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
                       </svg>
                     )}
-                  </Button>
+                  </button>
                 </TooltipTrigger>
                 <TooltipContent side="bottom">{copied ? 'Copied to clipboard!' : 'Copy conversation'}</TooltipContent>
               </Tooltip>
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    className="vc-icon-btn"
+                  <button
+                    type="button"
+                    className={cn(buttonVariants({ variant: "ghost", size: "icon-sm" }), "vc-icon-btn")}
                     aria-label="Export notes"
                     onClick={handleExportTranscript}
                     disabled={transcript.length === 0}
@@ -595,7 +608,7 @@ export default function VoiceCallScreen() {
                       <line x1="8.59" y1="13.51" x2="15.42" y2="17.49" />
                       <line x1="15.41" y1="6.51" x2="8.59" y2="10.49" />
                     </svg>
-                  </Button>
+                  </button>
                 </TooltipTrigger>
                 <TooltipContent side="bottom">Export notes</TooltipContent>
               </Tooltip>
@@ -775,16 +788,15 @@ export default function VoiceCallScreen() {
           <div className="vc-controls-right">
             <AlertDialog>
               <AlertDialogTrigger asChild>
-                <Button
-                  variant="destructive"
-                  size="default"
-                  className="vc-end-call-btn"
+                <button
+                  type="button"
+                  className={cn(buttonVariants({ variant: "destructive", size: "default" }), "vc-end-call-btn")}
                   aria-label="End call"
                 >
                   <EndCallIcon />
                   <span className="hidden sm:inline">End Call</span>
                   <span className="sm:hidden">End</span>
-                </Button>
+                </button>
               </AlertDialogTrigger>
               <AlertDialogContent>
                 <AlertDialogHeader>

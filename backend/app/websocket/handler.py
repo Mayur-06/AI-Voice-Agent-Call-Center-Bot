@@ -11,7 +11,7 @@ from app.services.vad import VADBuffer
 from app.services.audio_processor import compose_call_recording, save_session_recording
 from app.services.conversation_mgr import ConversationManager
 from app.services.call_summarizer import generate_call_summary
-from app.services.session import create_session, end_session, _get_default_persona_id
+from app.services.session import create_session, end_session, get_session_document_ids, _get_default_persona_id
 from app.services.tts import get_persona_voice_id
 from app.services.llm import get_persona_system_prompt
 from app.models.database import get_supabase, run_supabase
@@ -110,6 +110,13 @@ async def _handle_voice_pipeline_v2(websocket: WebSocket, session_id: str) -> No
         # never used and RAG filtered on the wrong persona_id.
         existing_session = await _load_session(session_id)
         if existing_session:
+            # A completed session is immutable. The client route has a guard
+            # too, but this check prevents a stale URL or custom client from
+            # reopening the call through the WebSocket directly.
+            if existing_session.get("status") == "ended" or existing_session.get("ended_at"):
+                await websocket.send_json({"type": "error", "message": "session_ended"})
+                await websocket.close(code=1008, reason="Session has ended")
+                return
             db_session_id = str(existing_session["id"])
             persona_id = str(existing_session.get("persona_id") or "") or await _get_default_persona_id()
         else:
@@ -141,6 +148,8 @@ async def _handle_voice_pipeline_v2(websocket: WebSocket, session_id: str) -> No
     except Exception:
         system_prompt = "You are a helpful voice assistant."
 
+    active_document_ids = await get_session_document_ids(db_session_id, persona_id)
+
     conversation_mgr = ConversationManager()
     # Reconnects resume an existing session, so turn numbering has to continue
     # from what is already stored. Restarting at 0 gave the new turns sequence
@@ -160,6 +169,7 @@ async def _handle_voice_pipeline_v2(websocket: WebSocket, session_id: str) -> No
         session_id=session_id,
         db_session_id=db_session_id,
         persona_id=persona_id,
+        active_document_ids=active_document_ids,
         voice_id=voice_id,
         websocket=websocket,
         audio_in_queue=asyncio.Queue(maxsize=settings.ws_queue_max_size),

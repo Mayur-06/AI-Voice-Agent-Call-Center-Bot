@@ -119,6 +119,14 @@ class Document(Base):
     chunks = relationship("DocumentChunk", back_populates="document", order_by="DocumentChunk.id")
 
 
+class SessionDocument(Base):
+    __tablename__ = "session_documents"
+
+    session_id = Column(UUID(as_uuid=True), ForeignKey("sessions.id", ondelete="CASCADE"), primary_key=True)
+    document_id = Column(UUID(as_uuid=True), ForeignKey("documents.id", ondelete="CASCADE"), primary_key=True)
+    attached_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
 class DocumentChunk(Base):
     __tablename__ = "document_chunks"
 
