@@ -2,7 +2,6 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useVoiceCall } from '@/hooks/useVoiceCall';
 import useCallStore from '@/store/callStore';
-import { useSessionStore } from '@/store/session';
 import { Button } from '@/components/ui/button';
 import { API_BASE, apiFetch } from '@/config';
 
@@ -164,7 +163,6 @@ export default function SessionScreen() {
   const setCallTranscript = useCallStore((s) => s.setTranscript);
   const setCallFiller = useCallStore((s) => s.setFiller);
   const setCallLatencies = useCallStore((s) => s.setLatencies);
-  const setSessionConnectionStatus = useSessionStore((s) => s.setConnectionStatus);
 
   const [isStarting, setIsStarting] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
@@ -362,7 +360,6 @@ export default function SessionScreen() {
       setCallSessionId(newSessionId);
       setCallStatus('idle');
       setCallConnectionStatus('disconnected');
-      setSessionConnectionStatus('disconnected');
       setCallTranscript([]);
       setError(null);
       setCallFiller(null);
@@ -372,11 +369,10 @@ export default function SessionScreen() {
       setError(err instanceof Error ? err.message : 'Failed to create session');
       setCallStatus('idle');
       setCallConnectionStatus('disconnected');
-      setSessionConnectionStatus('disconnected');
     } finally {
       setIsStarting(false);
     }
-  }, [selectedPersona, selectedVoiceId, setCallSessionId, setCallStatus, setCallConnectionStatus, setSessionConnectionStatus, setCallTranscript, setError, setCallFiller, setCallLatencies, navigate]);
+  }, [selectedPersona, selectedVoiceId, setCallSessionId, setCallStatus, setCallConnectionStatus, setCallTranscript, setError, setCallFiller, setCallLatencies, navigate]);
 
   const selectedPersonaData = PERSONAS.find((p) => p.id === selectedPersona);
   const selectedVoice = voices.find((v) => v.voice_id === selectedVoiceId);
