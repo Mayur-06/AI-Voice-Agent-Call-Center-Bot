@@ -18,6 +18,19 @@ _chunk_overlap = 50
 _pinecone_index = None
 _model = None
 
+# A compact, local diagnostic trail for session-scoped retrieval. This is kept
+# separate from the general backend log so a wrong-document report can be
+# investigated without exposing full retrieved document text.
+_scope_log_dir = os.path.join(os.path.dirname(__file__), "..", "..", "logs")
+os.makedirs(_scope_log_dir, exist_ok=True)
+_scope_logger = logging.getLogger("app.rag_scope")
+_scope_logger.setLevel(logging.INFO)
+_scope_logger.propagate = False
+if not any(getattr(handler, "baseFilename", "").endswith("rag_scope.log") for handler in _scope_logger.handlers):
+    _scope_handler = logging.FileHandler(os.path.join(_scope_log_dir, "rag_scope.log"), mode="a", encoding="utf-8")
+    _scope_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+    _scope_logger.addHandler(_scope_handler)
+
 # Dedicated pool. These calls previously ran on the default executor, which is
 # also what asyncio.to_thread (and therefore every Supabase query) uses, so
 # embedding, Pinecone and the database all contended for the same few threads.
@@ -154,7 +167,12 @@ async def store_chunks_in_pinecone(document_id: str, chunks: list[str], embeddin
     await _upsert_pinecone(vectors)
 
 
-async def _query_pinecone(query_embedding: list[float], top_k: int, filter_dict: Optional[dict]) -> list[tuple[str, str]]:
+async def _query_pinecone(
+    query_embedding: list[float],
+    top_k: int,
+    filter_dict: Optional[dict],
+    min_score: Optional[float],
+) -> list[tuple[str, str]]:
     index = _get_pinecone_index()
 
     def _do_query():
@@ -168,17 +186,17 @@ async def _query_pinecone(query_embedding: list[float], top_k: int, filter_dict:
     results = await _run(_do_query)
     chunks = []
     for match in results.matches:
-        if getattr(match, "score", 0.0) < settings.rag_min_score:
+        if min_score is not None and getattr(match, "score", 0.0) < min_score:
             continue
         text = match.metadata.get("text", "")
         filename = match.metadata.get("filename", "")
         if text:
             chunks.append((filename, text))
-    if not chunks and results.matches:
+    if min_score is not None and not chunks and results.matches:
         logger.info(
             "RAG_BELOW_THRESHOLD best_score=%.3f min=%.2f",
             max(getattr(m, "score", 0.0) for m in results.matches),
-            settings.rag_min_score,
+            min_score,
         )
     return chunks
 
@@ -188,41 +206,78 @@ async def retrieve_relevant_chunks(
     persona_id: str,
     top_k: int = 3,
     preferred_document_ids: Optional[list[str]] = None,
+    session_id: Optional[str] = None,
 ) -> list[tuple[str, str]]:
-    """Retrieve session documents first, then the persona's older library."""
+    """Use attached session documents exclusively, otherwise use the persona library.
+    when asked specific questions like- 'document in this session' never consider previous session's documents"""
     preferred_document_ids = list(dict.fromkeys(str(doc_id) for doc_id in (preferred_document_ids or []) if doc_id))
+    _scope_logger.info(
+        "RAG_SCOPE_START session=%s persona=%s attached_document_ids=%s query=%r",
+        session_id or "-", persona_id, preferred_document_ids, query[:200],
+    )
     try:
         query_embedding = await _run(_encode_query, query)
     except Exception:
         logger.exception("RAG_EMBEDDING_FAILED persona=%s", persona_id)
-        return await _database_fallback(query, persona_id, top_k, preferred_document_ids)
+        fallback = await _database_fallback(query, persona_id, top_k, preferred_document_ids)
+        _scope_logger.info(
+            "RAG_SCOPE_EMBEDDING_FALLBACK session=%s filenames=%s",
+            session_id or "-", [filename for filename, _ in fallback],
+        )
+        return fallback
 
     if preferred_document_ids:
         preferred_filter = {
             "persona_id": {"$eq": str(persona_id)},
             "document_id": {"$in": preferred_document_ids},
         }
-        preferred_chunks = await _retrieve_vector_chunks(query_embedding, top_k, preferred_filter, persona_id)
+        # A caller who attached a document is explicitly asking to search it.
+        # Broad questions such as "what is this document about?" have a low
+        # cosine score despite being valid requests, so do not discard the
+        # best scoped chunks using the persona-library relevance floor.
+        preferred_chunks = await _retrieve_vector_chunks(
+            query_embedding, top_k, preferred_filter, persona_id, min_score=None
+        )
+        _scope_logger.info(
+            "RAG_SCOPE_SESSION_VECTOR session=%s filter=%s filenames=%s",
+            session_id or "-", preferred_filter, [filename for filename, _ in preferred_chunks],
+        )
         if preferred_chunks:
             logger.info("RAG_SESSION_DOCUMENTS_USED persona=%s chunks=%d", persona_id, len(preferred_chunks))
             return preferred_chunks
         preferred_fallback = await _database_fallback(query, persona_id, top_k, preferred_document_ids)
+        _scope_logger.info(
+            "RAG_SCOPE_SESSION_DATABASE session=%s document_ids=%s filenames=%s",
+            session_id or "-", preferred_document_ids, [filename for filename, _ in preferred_fallback],
+        )
         if preferred_fallback:
             logger.info("RAG_SESSION_DOCUMENTS_FALLBACK_USED persona=%s chunks=%d", persona_id, len(preferred_fallback))
             return preferred_fallback
+        # An attached document set is the caller's explicit scope. Do not
+        # silently substitute older documents from the same persona when it
+        # has no answer: that was the source of cross-session answers.
+        logger.info("RAG_SESSION_DOCUMENTS_NO_MATCH persona=%s", persona_id)
+        _scope_logger.info("RAG_SCOPE_SESSION_NO_MATCH session=%s", session_id or "-")
+        return []
 
     persona_filter = {"persona_id": {"$eq": str(persona_id)}}
-    chunks = await _retrieve_vector_chunks(query_embedding, top_k, persona_filter, persona_id)
+    chunks = await _retrieve_vector_chunks(
+        query_embedding, top_k, persona_filter, persona_id, min_score=settings.rag_min_score
+    )
+    _scope_logger.info(
+        "RAG_SCOPE_PERSONA_VECTOR session=%s filter=%s filenames=%s",
+        session_id or "-", persona_filter, [filename for filename, _ in chunks],
+    )
     if chunks:
         return chunks
     return await _database_fallback(query, persona_id, top_k)
 
 
 async def _retrieve_vector_chunks(
-    query_embedding: list[float], top_k: int, filter_dict: dict, persona_id: str
+    query_embedding: list[float], top_k: int, filter_dict: dict, persona_id: str, min_score: Optional[float]
 ) -> list[tuple[str, str]]:
     try:
-        return await _query_pinecone(query_embedding, top_k, filter_dict)
+        return await _query_pinecone(query_embedding, top_k, filter_dict, min_score)
     except Exception:
         logger.exception("RAG_VECTOR_RETRIEVAL_FAILED persona=%s", persona_id)
         return []

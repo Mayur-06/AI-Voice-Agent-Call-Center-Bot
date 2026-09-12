@@ -372,6 +372,7 @@ async def _run_llm_turn(
                 msg.text,
                 persona_id=state.persona_id,
                 preferred_document_ids=state.active_document_ids,
+                session_id=state.db_session_id,
             )
         except Exception:
             logger.exception("RAG_FAILED session=%s", state.session_id)
