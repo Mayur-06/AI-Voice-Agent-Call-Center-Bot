@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useVoiceCall } from '@/hooks/useVoiceCall';
 import useCallStore from '@/store/callStore';
 import { Button } from '@/components/ui/button';
+import { Toast, ToastClose, ToastDescription, ToastTitle } from '@/components/ui/toast';
 import { API_BASE, apiFetch } from '@/config';
 
 const PERSONAS = [
@@ -246,6 +247,12 @@ export default function SessionScreen() {
     };
   }, [isPastSessionsDrawerOpen]);
 
+  useEffect(() => {
+    if (!error) return;
+    const t = setTimeout(() => setError(null), 4000);
+    return () => clearTimeout(t);
+  }, [error, setError]);
+
   const handleFiles = useCallback(async (files) => {
     const fileArray = Array.from(files).filter((file) => {
       const ext = '.' + file.name.split('.').pop().toLowerCase();
@@ -424,11 +431,11 @@ export default function SessionScreen() {
       {/* ─── Main Content ───────────────────────────────────────────── */}
       <main className="session-setup-main">
         {error && (
-          <div className="session-error-banner" role="alert">
-            <span className="session-error-icon">!</span>
-            <span className="session-error-text">{error}</span>
-            <button className="session-error-dismiss" onClick={() => setError(null)} aria-label="Dismiss error">×</button>
-          </div>
+          <Toast>
+            <ToastTitle>Unable to continue</ToastTitle>
+            <ToastDescription>{error}</ToastDescription>
+            <ToastClose onClick={() => setError(null)} />
+          </Toast>
         )}
 
         {/* Page intro */}
