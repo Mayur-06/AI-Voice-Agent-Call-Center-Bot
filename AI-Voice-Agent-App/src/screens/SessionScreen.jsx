@@ -364,6 +364,17 @@ export default function SessionScreen() {
 
       const data = await response.json();
       const newSessionId = data.id;
+      const documentIds = uploadedDocuments.map((doc) => doc?.id).filter(Boolean);
+      if (documentIds.length) {
+        const attachmentResponse = await apiFetch(`${API_BASE}/api/sessions/${newSessionId}/documents`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ document_ids: documentIds }),
+        });
+        if (!attachmentResponse.ok) {
+          throw new Error('Failed to attach documents to the session');
+        }
+      }
       setCallSessionId(newSessionId);
       setCallStatus('idle');
       setCallConnectionStatus('disconnected');
@@ -379,7 +390,7 @@ export default function SessionScreen() {
     } finally {
       setIsStarting(false);
     }
-  }, [selectedPersona, selectedVoiceId, setCallSessionId, setCallStatus, setCallConnectionStatus, setCallTranscript, setError, setCallFiller, setCallLatencies, navigate]);
+  }, [selectedPersona, selectedVoiceId, uploadedDocuments, setCallSessionId, setCallStatus, setCallConnectionStatus, setCallTranscript, setError, setCallFiller, setCallLatencies, navigate]);
 
   const selectedPersonaData = PERSONAS.find((p) => p.id === selectedPersona);
   const selectedVoice = voices.find((v) => v.voice_id === selectedVoiceId);

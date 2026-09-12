@@ -183,29 +183,64 @@ async def _query_pinecone(query_embedding: list[float], top_k: int, filter_dict:
     return chunks
 
 
-async def retrieve_relevant_chunks(query: str, persona_id: str, top_k: int = 3) -> list[tuple[str, str]]:
-    filter_dict = {"persona_id": {"$eq": str(persona_id)}}
+async def retrieve_relevant_chunks(
+    query: str,
+    persona_id: str,
+    top_k: int = 3,
+    preferred_document_ids: Optional[list[str]] = None,
+) -> list[tuple[str, str]]:
+    """Retrieve session documents first, then the persona's older library."""
+    preferred_document_ids = list(dict.fromkeys(str(doc_id) for doc_id in (preferred_document_ids or []) if doc_id))
     try:
         query_embedding = await _run(_encode_query, query)
-        chunks = await _query_pinecone(query_embedding, top_k, filter_dict)
     except Exception:
-        # An embedding or vector-store outage must not make a successfully
-        # persisted upload disappear from the caller's point of view.  The
-        # database fallback below remains safe because it is filtered by the
-        # same persona.
-        logger.exception("RAG_VECTOR_RETRIEVAL_FAILED persona=%s", persona_id)
-        chunks = []
+        logger.exception("RAG_EMBEDDING_FAILED persona=%s", persona_id)
+        return await _database_fallback(query, persona_id, top_k, preferred_document_ids)
+
+    if preferred_document_ids:
+        preferred_filter = {
+            "persona_id": {"$eq": str(persona_id)},
+            "document_id": {"$in": preferred_document_ids},
+        }
+        preferred_chunks = await _retrieve_vector_chunks(query_embedding, top_k, preferred_filter, persona_id)
+        if preferred_chunks:
+            logger.info("RAG_SESSION_DOCUMENTS_USED persona=%s chunks=%d", persona_id, len(preferred_chunks))
+            return preferred_chunks
+        preferred_fallback = await _database_fallback(query, persona_id, top_k, preferred_document_ids)
+        if preferred_fallback:
+            logger.info("RAG_SESSION_DOCUMENTS_FALLBACK_USED persona=%s chunks=%d", persona_id, len(preferred_fallback))
+            return preferred_fallback
+
+    persona_filter = {"persona_id": {"$eq": str(persona_id)}}
+    chunks = await _retrieve_vector_chunks(query_embedding, top_k, persona_filter, persona_id)
     if chunks:
         return chunks
+    return await _database_fallback(query, persona_id, top_k)
 
+
+async def _retrieve_vector_chunks(
+    query_embedding: list[float], top_k: int, filter_dict: dict, persona_id: str
+) -> list[tuple[str, str]]:
+    try:
+        return await _query_pinecone(query_embedding, top_k, filter_dict)
+    except Exception:
+        logger.exception("RAG_VECTOR_RETRIEVAL_FAILED persona=%s", persona_id)
+        return []
+
+
+async def _database_fallback(
+    query: str, persona_id: str, top_k: int, document_ids: Optional[list[str]] = None
+) -> list[tuple[str, str]]:
     # The document row and its chunks are persisted before the vector upsert.
     # Pinecone can briefly return no matches just after an upsert (and a
     # transient Pinecone failure used to make an otherwise uploaded document
-    # look unavailable).  Use those persisted chunks as a narrowly-scoped
-    # last resort.  This is deliberately only a fallback: Pinecone remains the
-    # semantic retriever, while the fallback requires an exact meaningful term
-    # from the caller's query and preserves the persona boundary.
-    fallback = await _run(_find_database_fallback_chunks, query, str(persona_id), top_k)
+    # look unavailable).  This fallback requires an exact meaningful term,
+    # and its document IDs remain restricted to the caller's persona.
+    try:
+        fallback = await _run(_find_database_fallback_chunks, query, str(persona_id), top_k, document_ids)
+    except Exception:
+        logger.exception("RAG_DATABASE_FALLBACK_FAILED persona=%s", persona_id)
+        return []
     if fallback:
         logger.info("RAG_DATABASE_FALLBACK persona=%s chunks=%d", persona_id, len(fallback))
     return fallback
@@ -219,7 +254,9 @@ _FALLBACK_STOP_WORDS = {
 }
 
 
-def _find_database_fallback_chunks(query: str, persona_id: str, top_k: int) -> list[tuple[str, str]]:
+def _find_database_fallback_chunks(
+    query: str, persona_id: str, top_k: int, document_ids: Optional[list[str]] = None
+) -> list[tuple[str, str]]:
     """Return lexical matches from indexed documents for one persona only."""
     terms = {
         term for term in re.findall(r"[a-z0-9]+", query.lower())
@@ -230,10 +267,13 @@ def _find_database_fallback_chunks(query: str, persona_id: str, top_k: int) -> l
 
     supabase = get_supabase()
     try:
-        documents = (
+        documents_query = (
             supabase.table("documents").select("id,filename")
-            .eq("persona_id", persona_id).eq("status", "indexed").execute().data or []
+            .eq("persona_id", persona_id).eq("status", "indexed")
         )
+        if document_ids:
+            documents_query = documents_query.in_("id", document_ids)
+        documents = documents_query.execute().data or []
         filenames = {str(doc["id"]): doc.get("filename", "") for doc in documents if doc.get("id")}
         if not filenames:
             return []

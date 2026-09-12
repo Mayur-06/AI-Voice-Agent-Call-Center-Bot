@@ -68,6 +68,7 @@ class SessionPipelineState:
     session_id: str
     db_session_id: str
     persona_id: str
+    active_document_ids: list[str]
     voice_id: str
     websocket: Any
 

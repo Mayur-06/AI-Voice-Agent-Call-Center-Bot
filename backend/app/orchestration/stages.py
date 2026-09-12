@@ -368,7 +368,11 @@ async def _run_llm_turn(
     if requires_rag(msg.text):
         safe_put_nowait(state.ws_event_queue, make_event(state, "status", message="retrieving_context"))
         try:
-            context = await retrieve_relevant_chunks(msg.text, persona_id=state.persona_id)
+            context = await retrieve_relevant_chunks(
+                msg.text,
+                persona_id=state.persona_id,
+                preferred_document_ids=state.active_document_ids,
+            )
         except Exception:
             logger.exception("RAG_FAILED session=%s", state.session_id)
 
