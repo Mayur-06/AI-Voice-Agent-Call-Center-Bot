@@ -184,11 +184,79 @@ async def _query_pinecone(query_embedding: list[float], top_k: int, filter_dict:
 
 
 async def retrieve_relevant_chunks(query: str, persona_id: str, top_k: int = 3) -> list[tuple[str, str]]:
-    query_embedding = await _run(_encode_query, query)
-
     filter_dict = {"persona_id": {"$eq": str(persona_id)}}
-    chunks = await _query_pinecone(query_embedding, top_k, filter_dict)
-    return chunks
+    try:
+        query_embedding = await _run(_encode_query, query)
+        chunks = await _query_pinecone(query_embedding, top_k, filter_dict)
+    except Exception:
+        # An embedding or vector-store outage must not make a successfully
+        # persisted upload disappear from the caller's point of view.  The
+        # database fallback below remains safe because it is filtered by the
+        # same persona.
+        logger.exception("RAG_VECTOR_RETRIEVAL_FAILED persona=%s", persona_id)
+        chunks = []
+    if chunks:
+        return chunks
+
+    # The document row and its chunks are persisted before the vector upsert.
+    # Pinecone can briefly return no matches just after an upsert (and a
+    # transient Pinecone failure used to make an otherwise uploaded document
+    # look unavailable).  Use those persisted chunks as a narrowly-scoped
+    # last resort.  This is deliberately only a fallback: Pinecone remains the
+    # semantic retriever, while the fallback requires an exact meaningful term
+    # from the caller's query and preserves the persona boundary.
+    fallback = await _run(_find_database_fallback_chunks, query, str(persona_id), top_k)
+    if fallback:
+        logger.info("RAG_DATABASE_FALLBACK persona=%s chunks=%d", persona_id, len(fallback))
+    return fallback
+
+
+_FALLBACK_STOP_WORDS = {
+    "a", "an", "and", "are", "can", "could", "do", "does", "for", "from",
+    "have", "how", "i", "in", "is", "it", "me", "my", "of", "on", "or",
+    "please", "tell", "that", "the", "this", "to", "what", "where", "which",
+    "who", "why", "with", "would", "you", "your",
+}
+
+
+def _find_database_fallback_chunks(query: str, persona_id: str, top_k: int) -> list[tuple[str, str]]:
+    """Return lexical matches from indexed documents for one persona only."""
+    terms = {
+        term for term in re.findall(r"[a-z0-9]+", query.lower())
+        if len(term) > 1 and term not in _FALLBACK_STOP_WORDS
+    }
+    if not terms:
+        return []
+
+    supabase = get_supabase()
+    try:
+        documents = (
+            supabase.table("documents").select("id,filename")
+            .eq("persona_id", persona_id).eq("status", "indexed").execute().data or []
+        )
+        filenames = {str(doc["id"]): doc.get("filename", "") for doc in documents if doc.get("id")}
+        if not filenames:
+            return []
+        rows = (
+            supabase.table("document_chunks").select("document_id,chunk_text")
+            .in_("document_id", list(filenames)).execute().data or []
+        )
+    except Exception:
+        logger.exception("RAG_DATABASE_FALLBACK_FAILED persona=%s", persona_id)
+        return []
+
+    ranked: list[tuple[int, str, str]] = []
+    for row in rows:
+        text = row.get("chunk_text") or ""
+        document_id = str(row.get("document_id") or "")
+        if not text or document_id not in filenames:
+            continue
+        text_terms = set(re.findall(r"[a-z0-9]+", text.lower()))
+        overlap = len(terms & text_terms)
+        if overlap:
+            ranked.append((overlap, filenames[document_id], text))
+    ranked.sort(key=lambda item: item[0], reverse=True)
+    return [(filename, text) for _, filename, text in ranked[:top_k]]
 
 
 async def index_document(document_id: str, chunks: list[str], filename: str = "", persona_id: Optional[str] = None):
@@ -232,7 +300,8 @@ def _encode_query(query: str) -> list[float]:
 
 def requires_rag(query: str) -> bool:
     question_words = {
-        "what", "how", "why", "when", "where", "who", "which",
+        "what", "how", "why", "when", "where", "who", "which", "can",
+        "could", "do", "does", "did", "is", "are", "will", "would", "should",
         "explain", "describe", "tell", "summarize", "find", "search",
         "look up", "look for", "according to",
     }
@@ -256,8 +325,11 @@ def requires_rag(query: str) -> bool:
     # An explicit reference to source material always retrieves.
     if any(indicator in q_lower for indicator in document_indicators):
         return True
-    # A question only retrieves if it is substantive enough to be about
-    # something in the knowledge base.
+    # Voice transcription commonly omits punctuation and short questions such
+    # as "What is the deductible" are normal document questions.  The old
+    # five-word requirement skipped them entirely, which made retrieval look
+    # intermittent.  Small talk has already returned above, so interrogatives
+    # should always get a retrieval attempt.
     if any(q_lower.startswith(w) or f" {w} " in f" {q_lower} " for w in question_words):
-        return len(q_lower.split()) > 4
+        return True
     return False

@@ -110,6 +110,13 @@ async def _handle_voice_pipeline_v2(websocket: WebSocket, session_id: str) -> No
         # never used and RAG filtered on the wrong persona_id.
         existing_session = await _load_session(session_id)
         if existing_session:
+            # A completed session is immutable. The client route has a guard
+            # too, but this check prevents a stale URL or custom client from
+            # reopening the call through the WebSocket directly.
+            if existing_session.get("status") == "ended" or existing_session.get("ended_at"):
+                await websocket.send_json({"type": "error", "message": "session_ended"})
+                await websocket.close(code=1008, reason="Session has ended")
+                return
             db_session_id = str(existing_session["id"])
             persona_id = str(existing_session.get("persona_id") or "") or await _get_default_persona_id()
         else:

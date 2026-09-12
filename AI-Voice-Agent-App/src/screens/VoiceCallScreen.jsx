@@ -380,7 +380,7 @@ export default function VoiceCallScreen() {
     stopCall();
     setUploadedDocuments([]);
     if (routeSessionId) {
-      navigate(`/review/${routeSessionId}`);
+      navigate(`/review/${routeSessionId}`, { replace: true });
     } else {
       navigate('/session');
     }
